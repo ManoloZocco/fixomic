@@ -136,3 +136,17 @@ enable_testing()
 list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 catch_discover_tests(fixomic_tests)
+
+# ---- fxprobe: driver diagnostics CLI (no JUCE) --------------------------------------------------
+add_executable(fxprobe tools/fxprobe/main.mm)
+target_include_directories(fxprobe PRIVATE src)
+target_compile_features(fxprobe PRIVATE cxx_std_20)
+target_compile_options(fxprobe PRIVATE -fobjc-arc -Wall -Wextra)
+target_link_libraries(fxprobe PRIVATE
+    "-framework CoreAudio"
+    "-framework CoreFoundation"
+    "-framework AudioToolbox"
+    "-framework AVFoundation"
+    "-framework Foundation"
+)
+set_target_properties(fxprobe PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")

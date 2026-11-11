@@ -16,3 +16,10 @@ Then:
     cmake -S . -B build -G Ninja
     cmake --build build
     ./build/fixomic_tests
+
+## Virtual microphone driver
+
+`fixomic Mic` comes from a HAL driver built from BlackHole (GPL-3.0); see `driver/README.md`:
+
+    scripts/build-driver.sh && sudo scripts/install-driver.sh
+    ./build/fxprobe check-driver
