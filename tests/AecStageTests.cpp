@@ -2,35 +2,17 @@
 
 #include <algorithm>
 #include <cmath>
-#include <atomic>
-#include <cstddef>
-#include <cstdlib>
-#include <new>
 #include <numbers>
 #include <random>
 #include <vector>
 
 #include "dsp/AecStage.h"
+#include "support/AllocCounter.h"
 
 using fixomic::AecStage;
 
-// Allocation counter so a test can prove process() never touches the heap. Only counts while
-// armed; replaces the global operator new for the whole test binary.
-namespace {
-std::atomic<bool> gCountAllocations{false};
-std::atomic<int> gAllocations{0};
-} // namespace
-
-void* operator new(std::size_t size) {
-    if (gCountAllocations.load(std::memory_order_relaxed)) gAllocations.fetch_add(1, std::memory_order_relaxed);
-    if (void* p = std::malloc(size ? size : 1)) return p;
-    throw std::bad_alloc();
-}
-void* operator new[](std::size_t size) { return operator new(size); }
-void operator delete(void* p) noexcept { std::free(p); }
-void operator delete[](void* p) noexcept { std::free(p); }
-void operator delete(void* p, std::size_t) noexcept { std::free(p); }
-void operator delete[](void* p, std::size_t) noexcept { std::free(p); }
+using fixomic::test::startCountingAllocations;
+using fixomic::test::stopCountingAllocations;
 
 namespace {
 
@@ -241,18 +223,14 @@ TEST_CASE("AecStage process never allocates, including after reset", "[aec]") {
             stage.process(s.mic.data() + pos, s.ref.data() + pos, out.data() + pos, 128);
     };
 
-    gAllocations = 0;
-    gCountAllocations = true;
+    startCountingAllocations();
     run(); // first frames: would trigger the APM's lazy initialisation if it were not warmed up
-    gCountAllocations = false;
-    REQUIRE(gAllocations.load() == 0);
+    REQUIRE(stopCountingAllocations() == 0);
 
     stage.reset();
-    gAllocations = 0;
-    gCountAllocations = true;
+    startCountingAllocations();
     run();
-    gCountAllocations = false;
-    REQUIRE(gAllocations.load() == 0);
+    REQUIRE(stopCountingAllocations() == 0);
 }
 
 TEST_CASE("AecStage passes audio through for unsupported sample rates", "[aec]") {

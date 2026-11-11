@@ -16,6 +16,11 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# AddressSanitizer for fixomic_core and everything linking it (app, tests). Use a separate build
+# directory, e.g. cmake -S . -B build-asan -G Ninja -DFIXOMIC_ASAN=ON. The prebuilt WebRTC APM
+# static library is not instrumented.
+option(FIXOMIC_ASAN "Build with AddressSanitizer" OFF)
+
 include(cmake/Dependencies.cmake)
 
 # ---- core library (everything except src/app) -----------------------------
@@ -23,9 +28,14 @@ add_library(fixomic_core STATIC
     src/core/Config.cpp
     src/core/ConfigStore.cpp
     src/dsp/AecStage.cpp
+    src/dsp/PluginChain.cpp
 )
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
+if(FIXOMIC_ASAN)
+    target_compile_options(fixomic_core PUBLIC -fsanitize=address -fno-omit-frame-pointer)
+    target_link_options(fixomic_core PUBLIC -fsanitize=address)
+endif()
 
 # JUCE modules are INTERFACE libraries whose unity-build sources get compiled into every
 # target that links them (even through COMPILE_ONLY). To compile them exactly once, only
@@ -111,7 +121,10 @@ add_executable(fixomic_tests
     tests/ConfigTests.cpp
     tests/FrameFifoTests.cpp
     tests/AecStageTests.cpp
+    tests/PluginChainTests.cpp
+    tests/support/AllocCounter.cpp
 )
+target_include_directories(fixomic_tests PRIVATE tests)
 target_link_libraries(fixomic_tests PRIVATE fixomic_core Catch2::Catch2WithMain)
 set_target_properties(fixomic_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 

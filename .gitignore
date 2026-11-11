@@ -4,3 +4,4 @@ build/
 third_party/install/
 dist/
 .superpowers/
+build-*/
