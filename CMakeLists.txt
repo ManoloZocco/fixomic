@@ -27,8 +27,10 @@ include(cmake/Dependencies.cmake)
 add_library(fixomic_core STATIC
     src/core/Config.cpp
     src/core/ConfigStore.cpp
+    src/core/LatencyBudget.cpp
     src/dsp/AecStage.cpp
     src/dsp/PluginChain.cpp
+    src/dsp/ProcessingGraph.cpp
 )
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
@@ -122,6 +124,8 @@ add_executable(fixomic_tests
     tests/FrameFifoTests.cpp
     tests/AecStageTests.cpp
     tests/PluginChainTests.cpp
+    tests/LatencyBudgetTests.cpp
+    tests/ProcessingGraphTests.cpp
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)
