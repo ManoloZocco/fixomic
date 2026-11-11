@@ -22,6 +22,7 @@ include(cmake/Dependencies.cmake)
 add_library(fixomic_core STATIC
     src/core/Config.cpp
     src/core/ConfigStore.cpp
+    src/dsp/AecStage.cpp
 )
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
@@ -44,6 +45,7 @@ set(FIXOMIC_JUCE_MODULES
 target_link_libraries(fixomic_core
     PRIVATE
         ${FIXOMIC_JUCE_MODULES}
+        webrtc::apm
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
@@ -105,7 +107,11 @@ target_link_libraries(fixomic
 )
 
 # ---- tests -------------------------------------------------------------------
-add_executable(fixomic_tests tests/ConfigTests.cpp)
+add_executable(fixomic_tests
+    tests/ConfigTests.cpp
+    tests/FrameFifoTests.cpp
+    tests/AecStageTests.cpp
+)
 target_link_libraries(fixomic_tests PRIVATE fixomic_core Catch2::Catch2WithMain)
 set_target_properties(fixomic_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 

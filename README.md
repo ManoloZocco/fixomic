@@ -7,6 +7,12 @@ Work in progress. Licensed under AGPL-3.0-or-later (see `LICENSE` and `NOTICE`).
 
 ## Build
 
+One-time: build the WebRTC audio processing (AEC3) static libraries (needs `brew install meson ninja`):
+
+    scripts/build-webrtc-apm.sh
+
+Then:
+
     cmake -S . -B build -G Ninja
     cmake --build build
     ./build/fixomic_tests
