@@ -1,0 +1,40 @@
+Box name, box model and box manufacturer come from kDriver_Name / kManufacturer_Name
+instead of hard-coded BlackHole / Existential Audio strings (GPL-3.0 build of BlackHole v0.7.2).
+
+--- a/BlackHole/BlackHole.c
++++ b/BlackHole/BlackHole.c
+@@ -780,7 +780,7 @@
+ 	//	set the box name directly as a last resort
+ 	if(gBox_Name == NULL)
+ 	{
+-		gBox_Name = CFSTR("BlackHole Box");
++		gBox_Name = CFSTR(kDriver_Name);
+ 	}
+ 	
+ 	//	calculate the host ticks per frame
+@@ -1912,14 +1912,14 @@
+ 		case kAudioObjectPropertyModelName:
+ 			//	This is the human readable name of the maker of the box.
+ 			FailWithAction(inDataSize < sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "BlackHole_GetBoxPropertyData: not enough space for the return value of kAudioObjectPropertyManufacturer for the box");
+-			*((CFStringRef*)outData) = CFSTR("BlackHole");
++			*((CFStringRef*)outData) = CFSTR(kDriver_Name);
+ 			*outDataSize = sizeof(CFStringRef);
+ 			break;
+ 			
+ 		case kAudioObjectPropertyManufacturer:
+ 			//	This is the human readable name of the maker of the box.
+ 			FailWithAction(inDataSize < sizeof(CFStringRef), theAnswer = kAudioHardwareBadPropertySizeError, Done, "BlackHole_GetBoxPropertyData: not enough space for the return value of kAudioObjectPropertyManufacturer for the box");
+-			*((CFStringRef*)outData) = CFSTR("Existential Audio Inc.");
++			*((CFStringRef*)outData) = CFSTR(kManufacturer_Name);
+ 			*outDataSize = sizeof(CFStringRef);
+ 			break;
+ 			
+@@ -2105,7 +2105,7 @@
+ 			//	of this property should only send the notification if the hardware wants the app to
+ 			//	flash it's UI for the device.
+ 			{
+-				syslog(LOG_NOTICE, "The identify property has been set on the Box implemented by the BlackHole driver.");
++				syslog(LOG_NOTICE, "The identify property has been set on the Box implemented by the " kDriver_Name " driver.");
+ 				FailWithAction(inDataSize != sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "BlackHole_SetBoxPropertyData: wrong size for the data for kAudioObjectPropertyIdentify");
+ 				dispatch_after(dispatch_time(0, 2ULL * 1000ULL * 1000ULL * 1000ULL), dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0),	^()
+ 																																		{

@@ -35,7 +35,14 @@ are mirrored in `src/platform/mac/FixomicDevices.h`. Bridge is hidden, so it is 
 bundle its own CFPlugIn factory UUID, so it never clashes with an installed BlackHole. Setting
 `FIXOMIC_DRIVER_EXTRA_PATCHES=<dir>` applies extra patches from `<dir>` (local diagnostics only).
 
-No patches are needed for v0.7.2: all `fxprobe check-driver` checks pass on the stock source.
+Branding: BlackHole's license does not allow unofficial builds to carry Existential Audio's
+branding, so the build replaces it. `driver/patches/0001-box-branding-from-macros.patch` derives
+the box name, model and manufacturer from `kDriver_Name` / `kManufacturer_Name` (upstream
+hard-codes "BlackHole Box", "BlackHole", "Existential Audio Inc."). The device icon is
+`driver/resources/fixomic.icns`, a placeholder regenerated with `scripts/make-driver-icon.sh`.
+Upstream README, CHANGELOG, VERSION and icon are removed from the bundle; the GPL-3.0 LICENSE
+stays. The bundle version is fixomic's project version. The audio path itself is unpatched: all
+`fxprobe check-driver` checks pass on the stock IO code.
 
 ## Demand detection (used by Task 7)
 

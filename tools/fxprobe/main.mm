@@ -565,6 +565,9 @@ bool checkDemand(const Devices& d)
     while ((sample().somewhere == 1 || sample().running == 1) && std::chrono::steady_clock::now() - t < 3s)
         std::this_thread::sleep_for(50ms);
     const Sample before = sample();
+    if (before.somewhere == 1)
+        std::printf("    IsRunningSomewhere is already 1: another app is reading %s, close it and retry\n",
+                    devices::kMicName);
 
     const std::string self = selfPath();
     char arg1[] = "hold-mic";
@@ -577,7 +580,23 @@ bool checkDemand(const Devices& d)
     }
     Sample during{0, 0};
     int status = 0;
-    while (waitpid(child, &status, WNOHANG) == 0) {
+    bool waitFailed = false;
+    bool timedOut = false;
+    const auto childDeadline = std::chrono::steady_clock::now() + 10s;
+    for (;;) {
+        const pid_t r = waitpid(child, &status, WNOHANG);
+        if (r == child)
+            break;
+        if (r == -1) {
+            waitFailed = true;
+            break;
+        }
+        if (std::chrono::steady_clock::now() > childDeadline) {
+            timedOut = true;
+            kill(child, SIGKILL);
+            waitpid(child, &status, 0);
+            break;
+        }
         const Sample s = sample();
         if (s.somewhere == 1)
             during.somewhere = 1;
@@ -591,8 +610,12 @@ bool checkDemand(const Devices& d)
         std::this_thread::sleep_for(50ms);
         after = sample();
     }
-    const bool childOk = WIFEXITED(status) && WEXITSTATUS(status) == 0;
-    std::printf("    reader process %d exited %s\n", child, childOk ? "ok" : "with an error");
+    const bool childOk = !waitFailed && !timedOut && WIFEXITED(status) && WEXITSTATUS(status) == 0;
+    std::printf("    reader process %d %s\n", child,
+                waitFailed ? "could not be waited for"
+                : timedOut ? "did not finish within 10 s and was killed"
+                : childOk  ? "exited ok"
+                           : "exited with an error");
     std::printf("    IsRunningSomewhere: before %u, during max %u, after %u\n", before.somewhere, during.somewhere,
                 after.somewhere);
     std::printf("    IsRunning:          before %u, during max %u, after %u\n", before.running, during.running,
@@ -617,6 +640,13 @@ bool checkRateLocked(const Devices& d)
     std::this_thread::sleep_for(500ms);
     const double rate = nominalRate(d.mic);
     std::printf("    settable %d, set 44100 -> %s, rate now %.0f\n", settable, fourCC(status).c_str(), rate);
+    if (status == noErr || rate != devices::kSampleRate) {
+        // Never leave the device at a wrong rate behind.
+        const Float64 restore = devices::kSampleRate;
+        const OSStatus restored = AudioObjectSetPropertyData(d.mic, &addr, 0, nullptr, sizeof(restore), &restore);
+        std::this_thread::sleep_for(500ms);
+        std::printf("    restored %.0f -> %s, rate now %.0f\n", restore, fourCC(restored).c_str(), nominalRate(d.mic));
+    }
     const bool ok = status != noErr && rate == devices::kSampleRate;
     std::printf("    => %s\n", ok ? "PASS" : "FAIL");
     return ok;

@@ -4,9 +4,11 @@ Licensed under the GNU Affero General Public License v3.0 or later (see LICENSE)
 
 This product includes or links against the following third-party components:
 
-- BlackHole (virtual audio driver)
-  License: GPL-3.0
+- BlackHole (virtual audio driver), Copyright (C) Existential Audio Inc.
+  License: GPL-3.0 (see driver/LICENSE)
   https://github.com/ExistentialAudio/BlackHole
+  The fixomic driver (driver/) is an unofficial build of BlackHole v0.7.2 with fixomic names,
+  icon and a small branding patch; it is not endorsed by Existential Audio.
 
 - JUCE
   License: AGPL-3.0

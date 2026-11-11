@@ -4,7 +4,9 @@
 #
 # The submodule driver/BlackHole is never modified: it is copied to build/driver/src, the
 # patches in driver/patches/*.patch are applied to that copy (in lexical order), and the copy
-# is built with xcodebuild. The bundle is signed ad-hoc.
+# is built with xcodebuild. Upstream branding is replaced (device icon driver/resources/fixomic.icns,
+# upstream README/CHANGELOG/VERSION/icon removed from Resources, version = fixomic's), then the
+# bundle is signed ad-hoc. The GPL-3.0 LICENSE stays in the bundle.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -14,19 +16,25 @@ OUT_DIR="$ROOT/build/driver"
 SRC_DIR="$OUT_DIR/src"
 XCODE_OUT="$OUT_DIR/xcode"
 PRODUCT="$OUT_DIR/fixomic.driver"
+ICON="$ROOT/driver/resources/fixomic.icns"
+LOG="$OUT_DIR/xcodebuild.log"
 
 BUNDLE_ID="it.manolozocco.fixomic.driver"
 DEPLOYMENT_TARGET="14.4"
+# Bundle version = fixomic's project version (project(fixomic VERSION x.y.z) in CMakeLists.txt).
+VERSION="$(sed -nE 's/^project\(fixomic VERSION ([0-9.]+).*/\1/p' "$ROOT/CMakeLists.txt")"
+[[ -n "$VERSION" ]] || { echo "error: cannot read the project version from CMakeLists.txt" >&2; exit 1; }
 # BlackHole ships a fixed CFPlugIn factory UUID; every derived driver must use its own so that
 # coreaudiod never sees two bundles registering the same factory.
 FACTORY_UUID_UPSTREAM="e395c745-4eea-4d94-bb92-46224221047c"
 FACTORY_UUID="3d76a877-64be-43f2-aa01-b4194a898640"
 
-for tool in xcodebuild rsync patch lipo codesign /usr/libexec/PlistBuddy; do
+for tool in xcodebuild rsync patch lipo codesign strings /usr/libexec/PlistBuddy; do
     command -v "$tool" >/dev/null || { echo "error: '$tool' not found" >&2; exit 1; }
 done
 [[ -f "$UPSTREAM/BlackHole/BlackHole.c" ]] || {
     echo "error: $UPSTREAM is empty (git submodule update --init driver/BlackHole)" >&2; exit 1; }
+[[ -f "$ICON" ]] || { echo "error: $ICON missing (scripts/make-driver-icon.sh)" >&2; exit 1; }
 
 rm -rf "$SRC_DIR" "$XCODE_OUT" "$PRODUCT"
 mkdir -p "$SRC_DIR"
@@ -59,8 +67,11 @@ DEFINES=(
     'kCanBeDefaultDevice=false'
     'kCanBeDefaultSystemDevice=false'
     'kManufacturer_Name=\"fixomic\"'
+    'kPlugIn_Icon=\"fixomic.icns\"'
 )
 
+echo "xcodebuild (log: $LOG)"
+set +e
 xcodebuild \
     -project "$SRC_DIR/BlackHole.xcodeproj" \
     -target BlackHole \
@@ -77,12 +88,28 @@ xcodebuild \
     CODE_SIGN_IDENTITY="" \
     DEVELOPMENT_TEAM="" \
     GCC_PREPROCESSOR_DEFINITIONS="\$(inherited) ${DEFINES[*]}" \
-    | grep -E "^(\*\*|error|warning: .*BlackHole\.c)" || true
+    > "$LOG" 2>&1
+status=$?
+set -e
+grep -E ' error: |\*\*' "$LOG" || true
+if [[ $status -ne 0 ]]; then
+    echo "error: xcodebuild failed with status $status (see $LOG)" >&2
+    exit "$status"
+fi
 
-[[ -d "$XCODE_OUT/fixomic.driver" ]] || { echo "error: xcodebuild did not produce fixomic.driver" >&2; exit 1; }
+[[ -f "$XCODE_OUT/fixomic.driver/Contents/MacOS/fixomic" ]] || {
+    echo "error: xcodebuild did not produce fixomic.driver/Contents/MacOS/fixomic" >&2; exit 1; }
 mv "$XCODE_OUT/fixomic.driver" "$PRODUCT"
 
+# Replace upstream resources: keep only the GPL LICENSE, add our icon.
+RES="$PRODUCT/Contents/Resources"
+rm -f "$RES/BlackHole.icns" "$RES/README.md" "$RES/CHANGELOG.md" "$RES/VERSION"
+cp "$ICON" "$RES/fixomic.icns"
+
 PLIST="$PRODUCT/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" \
+    -c "Set :CFBundleVersion $VERSION" \
+    "$PLIST"
 /usr/libexec/PlistBuddy -c "Delete :CFPlugInFactories:$FACTORY_UUID_UPSTREAM" \
     -c "Add :CFPlugInFactories:$FACTORY_UUID string BlackHole_Create" \
     -c "Delete :CFPlugInTypes:443ABAB8-E7B3-491A-B985-BEB9187030DB:0" \
@@ -98,9 +125,15 @@ archs="$(lipo -archs "$BIN")"
 [[ " $archs " == *" arm64 "* && " $archs " == *" x86_64 "* ]] || fail "not universal: $archs"
 plist_id="$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$PLIST")"
 [[ "$plist_id" == "$BUNDLE_ID" ]] || fail "CFBundleIdentifier is '$plist_id'"
-for s in "fixomic Mic" "fixomic Bridge" "fixomic_UID" "fixomic_2_UID" "$BUNDLE_ID"; do
-    strings -a "$BIN" | grep -qxF "$s" || fail "string '$s' missing from the binary (macro quoting?)"
+BIN_STRINGS="$(strings -a "$BIN")"
+for s in "fixomic Mic" "fixomic Bridge" "fixomic_UID" "fixomic_2_UID" "$BUNDLE_ID" "fixomic.icns"; do
+    grep -qxF "$s" <<<"$BIN_STRINGS" || fail "string '$s' missing from the binary (macro quoting?)"
 done
+for s in "Existential" "BlackHole Box" "BlackHole.icns"; do
+    ! grep -qF "$s" <<<"$BIN_STRINGS" || fail "upstream branding '$s' still in the binary"
+done
+resources="$(cd "$RES" && LC_ALL=C ls | tr '\n' ' ')"
+[[ "$resources" == "LICENSE fixomic.icns " ]] || fail "unexpected resources: $resources"
 codesign --verify --deep --strict "$PRODUCT"
 
-echo "built $PRODUCT ($archs, $plist_id, factory $FACTORY_UUID)"
+echo "built $PRODUCT ($archs, $plist_id $VERSION, factory $FACTORY_UUID)"
