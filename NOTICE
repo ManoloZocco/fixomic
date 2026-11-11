@@ -1,0 +1,25 @@
+fixomic
+Copyright (C) 2026 Manolo Zocco
+Licensed under the GNU Affero General Public License v3.0 or later (see LICENSE).
+
+This product includes or links against the following third-party components:
+
+- BlackHole (virtual audio driver)
+  License: GPL-3.0
+  https://github.com/ExistentialAudio/BlackHole
+
+- JUCE
+  License: AGPL-3.0
+  https://github.com/juce-framework/JUCE
+
+- WebRTC audio processing (AEC3)
+  License: BSD-3-Clause
+  https://webrtc.googlesource.com/src/
+
+- VST3 SDK
+  License: MIT
+  https://github.com/steinbergmedia/vst3sdk
+
+- Catch2 (test framework, not distributed in the app)
+  License: BSL-1.0
+  https://github.com/catchorg/Catch2
