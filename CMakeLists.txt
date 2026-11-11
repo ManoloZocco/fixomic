@@ -14,6 +14,8 @@ set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
 include(cmake/Dependencies.cmake)
 
 # ---- core library (everything except src/app) -----------------------------
@@ -23,16 +25,48 @@ add_library(fixomic_core STATIC
 )
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
+
+# JUCE modules are INTERFACE libraries whose unity-build sources get compiled into every
+# target that links them (even through COMPILE_ONLY). To compile them exactly once, only
+# fixomic_core links them (PRIVATE: the sources and link-only requirements stay here). The
+# compile-time usage requirements (definitions, include dirs, C++ standard) are re-exported
+# explicitly to fixomic and fixomic_tests, which link just fixomic_core.
+set(FIXOMIC_JUCE_MODULES
+    juce::juce_core
+    juce::juce_events
+    juce::juce_data_structures
+    juce::juce_audio_basics
+    juce::juce_audio_processors
+    juce::juce_audio_utils
+    juce::juce_gui_basics
+    juce::juce_gui_extra
+)
 target_link_libraries(fixomic_core
-    PUBLIC
-        juce::juce_core
     PRIVATE
+        ${FIXOMIC_JUCE_MODULES}
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
 )
+
+# Transitive closure of the modules above (property reads are not transitive), plus the
+# header-only helper targets they pull in.
+set(FIXOMIC_JUCE_USAGE_TARGETS
+    juce_core juce_events juce_data_structures juce_audio_basics juce_audio_devices
+    juce_audio_formats juce_audio_processors_headless juce_audio_processors juce_audio_utils
+    juce_graphics juce_gui_basics juce_gui_extra
+    juce_atomic_wrapper juce_vst3_headers juce_lilv_headers juce_ara_headers
+)
+foreach(usage_target IN LISTS FIXOMIC_JUCE_USAGE_TARGETS)
+    target_compile_definitions(fixomic_core PUBLIC
+        "$<TARGET_PROPERTY:${usage_target},INTERFACE_COMPILE_DEFINITIONS>")
+    target_include_directories(fixomic_core SYSTEM PUBLIC
+        "$<TARGET_PROPERTY:${usage_target},INTERFACE_INCLUDE_DIRECTORIES>")
+endforeach()
 target_compile_definitions(fixomic_core PUBLIC
     JUCE_WEB_BROWSER=0
     JUCE_USE_CURL=0
+    JUCE_PLUGINHOST_AU=1
+    JUCE_PLUGINHOST_VST3=1
 )
 
 # ---- app bundle ------------------------------------------------------------
@@ -59,17 +93,12 @@ juce_add_gui_app(fixomic
 
 target_sources(fixomic PRIVATE src/app/Main.cpp)
 target_compile_definitions(fixomic PRIVATE
-    JUCE_WEB_BROWSER=0
-    JUCE_USE_CURL=0
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:fixomic,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
 )
 target_link_libraries(fixomic
     PRIVATE
         fixomic_core
-        juce::juce_gui_basics
-        juce::juce_gui_extra
-        juce::juce_events
     PRIVATE
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
