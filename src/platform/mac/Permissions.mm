@@ -1,5 +1,6 @@
 #include "platform/mac/Permissions.h"
 
+#include "platform/mac/CoreAudioUtil.h"
 #include "platform/mac/SystemAudioTap.h"
 
 #import <AVFoundation/AVFoundation.h>
@@ -48,17 +49,18 @@ TccPreflight tccPreflight()
     return fn;
 }
 
-// The throwaway IO behind requestSystemAudio(). Background thread.
-void raiseSystemAudioPrompt()
+// The throwaway IO behind requestSystemAudio(). Background thread. "" once the IOProc was created
+// (the prompt, if there was one, has been answered), otherwise the step that failed.
+juce::String raiseSystemAudioPrompt()
 {
     juce::String error;
     auto tap = SystemAudioTap::create(error);
     if (!tap)
-        return;   // openIO() then reports why when it tries the real tap
+        return error;
     @autoreleasepool {
         NSString* tapUid = [NSString stringWithUTF8String:tap->uid().toRawUTF8()];
         if (tapUid == nil)
-            return;
+            return "system audio tap: invalid UID";
         NSDictionary* description = @{
             @kAudioAggregateDeviceNameKey : @"fixomic permission",
             @kAudioAggregateDeviceUIDKey : [@"fixomic_permission_" stringByAppendingString:[NSUUID UUID].UUIDString],
@@ -70,18 +72,22 @@ void raiseSystemAudioPrompt()
             } ],
         };
         AudioObjectID aggregate = kAudioObjectUnknown;
-        if (AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)description, &aggregate) != noErr)
-            return;
+        const OSStatus created = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)description, &aggregate);
+        if (created != noErr || aggregate == kAudioObjectUnknown)
+            return "AudioHardwareCreateAggregateDevice failed: " + util::statusString(created);
         AudioDeviceIOProcID proc = nullptr;
         // Blocks here while the prompt is up (measured: 17-22 s until answered).
-        if (AudioDeviceCreateIOProcIDWithBlock(&proc, aggregate, nullptr,
-                                               ^(const AudioTimeStamp*, const AudioBufferList*, const AudioTimeStamp*,
-                                                 AudioBufferList*, const AudioTimeStamp*) {
-                                               })
-                == noErr
-            && proc != nullptr)
+        const OSStatus status = AudioDeviceCreateIOProcIDWithBlock(
+            &proc, aggregate, nullptr,
+            ^(const AudioTimeStamp*, const AudioBufferList*, const AudioTimeStamp*, AudioBufferList*,
+              const AudioTimeStamp*) {
+            });
+        if (status == noErr && proc != nullptr)
             AudioDeviceDestroyIOProcID(aggregate, proc);
         AudioHardwareDestroyAggregateDevice(aggregate);
+        if (status != noErr || proc == nullptr)
+            return "AudioDeviceCreateIOProcID failed: " + util::statusString(status);
+        return {};
     }
 }
 
@@ -99,13 +105,13 @@ Permission systemAudioPermission()
     }
 }
 
-void requestSystemAudio(std::function<void()> completion)
+void requestSystemAudio(std::function<void(bool ok, juce::String error)> completion)
 {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        raiseSystemAudioPrompt();
+        const juce::String error = raiseSystemAudioPrompt();
         dispatch_async(dispatch_get_main_queue(), ^{
             if (completion)
-                completion();
+                completion(error.isEmpty(), error);
         });
     });
 }

@@ -15,7 +15,7 @@
 // (JUCE passes a second launch's command line to anotherInstanceStarted()); results go to the
 // running instance's stderr:
 //
-//   --status                    engine state, chain, latency, scan state
+//   --status                    engine state, chain, latency, scan state, open IO, meters
 //   --list-effects              the catalog's effects
 //   --add-plugin <name> [fmt]   adds the first effect named <name> (format AudioUnit / VST3)
 //   --remove-plugin <i> | --open-editor <i> | --bypass <i> <0|1>
@@ -63,6 +63,8 @@ void printStatus(AppController& app) {
         log("  slot " + juce::String(static_cast<int>(i)) + ": " + slots[i].name + (slots[i].missing ? " [missing]" : "")
             + (slots[i].bypassed ? " [bypassed]" : "") + ", latency " + juce::String(slots[i].latencySamples));
     for (const auto& warning : app.startupWarnings()) log("  startup warning: " + warning);
+    log("  " + app.ioDiagnostics() + ", input peak " + juce::String(app.inputPeakDb(), 1) + " dB, output peak "
+        + juce::String(app.outputPeakDb(), 1) + " dB");
 }
 
 const char* permissionText(fixomic::mac::Permission permission) {

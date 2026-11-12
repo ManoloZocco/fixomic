@@ -40,6 +40,12 @@ juce::String MacEngineBackend::systemAudioDeniedWarning()
            + juce::String::fromUTF8(kSystemAudioSettings) + ".";
 }
 
+juce::String MacEngineBackend::systemAudioUnavailableWarning(const juce::String& reason)
+{
+    return juce::String::fromUTF8("Audio di sistema non disponibile, la cancellazione dell'eco \u00e8 disattivata: ")
+           + reason;
+}
+
 juce::String MacEngineBackend::systemAudioSilentWarning()
 {
     return juce::String::fromUTF8("Il permesso audio di sistema \u00e8 probabilmente negato: fixomic riceve solo "
@@ -145,9 +151,7 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
         juce::String tapError;
         tap_ = SystemAudioTap::create(tapError);
         if (!tap_ && onWarning)
-            onWarning(juce::String::fromUTF8("Audio di sistema non disponibile, la cancellazione dell'eco \u00e8 "
-                                             "disattivata: ")
-                      + tapError);
+            onWarning(systemAudioUnavailableWarning(tapError));
     }
 
     // Without a tap the aggregate hands the callback a silent reference: pass none to the graph so
@@ -209,14 +213,24 @@ bool MacEngineBackend::checkSystemAudio(bool& withTap, juce::String& error)
     // process): after one prompt the real tap is created as usual.
     if (audioRequest_ == Request::Done || !audioAccess_.request)
         return true;
+    if (audioRequest_ == Request::Failed) {
+        // The throwaway IO failed, so the prompt may still be pending: a tap IOProc created here
+        // would raise it on the main thread. This open goes without the tap; the next one asks again.
+        audioRequest_ = Request::None;
+        withTap = false;
+        if (onWarning)
+            onWarning(systemAudioUnavailableWarning(audioRequestError_));
+        return true;
+    }
     if (audioRequest_ == Request::None) {
         audioRequest_ = Request::Pending;
-        audioAccess_.request([this, alive = alive_] {
+        audioAccess_.request([this, alive = alive_](bool ok, juce::String requestError) {
             if (!*alive)
                 return;
-            audioRequest_ = Request::Done;
+            audioRequest_ = ok ? Request::Done : Request::Failed;
+            audioRequestError_ = requestError.isNotEmpty() ? requestError : juce::String("unknown error");
             if (onSystemAudioPermission)
-                onSystemAudioPermission();
+                onSystemAudioPermission();   // re-evaluated at once: with the tap, or without it
         });
     }
     error = kWaitingForSystemAudio;

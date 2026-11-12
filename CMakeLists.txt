@@ -176,7 +176,7 @@ else()
                     "re-run CMake, or fixomic.app will not carry the driver (in-app install unavailable)")
 endif()
 add_custom_command(TARGET fixomic POST_BUILD
-    COMMAND /bin/sh -c "rm -rf \"$1/Contents/Resources/fixomic.driver\" && if [ -d \"$0\" ]; then ditto \"$0\" \"$1/Contents/Resources/fixomic.driver\"; else echo \"warning: $0 not found (run scripts/build-driver.sh): fixomic.app ships without the driver\" >&2; fi"
+    COMMAND /bin/sh -c "rm -rf \"$1/Contents/Resources/fixomic.driver\" && if [ -d \"$0\" ]; then ditto --noqtn \"$0\" \"$1/Contents/Resources/fixomic.driver\"; else echo \"warning: $0 not found (run scripts/build-driver.sh): fixomic.app ships without the driver\" >&2; fi"
             "${FIXOMIC_DRIVER_BUNDLE}" "$<TARGET_BUNDLE_DIR:fixomic>"
     VERBATIM)
 add_custom_command(TARGET fixomic POST_BUILD

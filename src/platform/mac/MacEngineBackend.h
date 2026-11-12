@@ -32,7 +32,7 @@ struct MicrophoneAccess {
 // Where openIO() gets the System Audio Recording state (injectable for tests).
 struct SystemAudioAccess {
     std::function<Permission()> status = systemAudioPermission;
-    std::function<void(std::function<void()>)> request = requestSystemAudio;
+    std::function<void(std::function<void(bool ok, juce::String error)>)> request = requestSystemAudio;
     // The silence fallback (see MacEngineBackend): whether the default output device is running.
     std::function<bool()> outputRunning;   // empty = the real default output device
 };
@@ -55,8 +55,11 @@ struct SystemAudioAccess {
 //     permesso per il microfono" until onMicrophonePermission; denied -> fails.
 //   system audio (only with a tap) not determined -> requestSystemAudio() raises the prompt once on
 //     a background queue, openIO() fails with "In attesa del permesso per l'audio di sistema" until
-//     onSystemAudioPermission; afterwards the tap is created normally. Denied -> the IO opens
-//     without the tap (AEC inactive) and onWarning tells where to enable it.
+//     onSystemAudioPermission; afterwards the tap is created normally. If that throwaway IO failed
+//     (the prompt may not have been shown) the main thread never creates the tap in its place: the
+//     next openIO() opens without it (AEC inactive, onWarning says why) and the one after asks
+//     again. Denied -> the IO opens without the tap (AEC inactive) and onWarning tells where to
+//     enable it.
 //   Unless the permission is known to be granted, a tap that delivers only digital silence for
 //     TapSilenceWatch::kSilentSeconds while the default output device is running raises onWarning
 //     ("probably denied"), once per open.
@@ -95,8 +98,9 @@ public:
     // engine (e.g. EngineController::onMicListChanged(), deferred).
     std::function<void(bool granted)> onMicrophonePermission;
 
-    // The System Audio Recording prompt raised by openIO() was answered (outcome unknown). Main
-    // thread; re-evaluate the engine, deferred.
+    // The System Audio Recording prompt raised by openIO() was answered (outcome unknown), or the
+    // throwaway IO that raises it failed (the next openIO() then goes without the tap). Main thread;
+    // re-evaluate the engine, deferred.
     std::function<void()> onSystemAudioPermission;
 
     // The tap could not be created, the system audio permission is denied, or the tap stays silent
@@ -113,9 +117,10 @@ public:
     static const char* const kWaitingForSystemAudio;
     static juce::String systemAudioDeniedWarning();
     static juce::String systemAudioSilentWarning();
+    static juce::String systemAudioUnavailableWarning(const juce::String& reason);
 
 private:
-    enum class Request { None, Pending, Done };
+    enum class Request { None, Pending, Done, Failed };
 
     // Applies the system audio permission to a tap request: false = do not open yet (`error` set).
     bool checkSystemAudio(bool& withTap, juce::String& error);
@@ -129,7 +134,8 @@ private:
     MicrophoneAccess micAccess_;
     SystemAudioAccess audioAccess_;
     bool micRequested_ = false;         // the prompt is raised at most once per backend
-    Request audioRequest_ = Request::None;   // the system audio prompt, at most once per backend
+    Request audioRequest_ = Request::None;   // the system audio prompt, until it was raised once
+    juce::String audioRequestError_;         // why the last throwaway IO failed (Request::Failed)
     std::atomic<bool> refHeard_{false};      // set by the IO thread on a non-zero tap sample
     struct SilenceTimer;
     std::unique_ptr<SilenceTimer> silenceTimer_;

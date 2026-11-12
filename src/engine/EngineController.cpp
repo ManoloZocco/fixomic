@@ -74,6 +74,11 @@ void EngineController::onSystemWake() {
     evaluate();
 }
 
+void EngineController::onServiceRestarted() {
+    close();      // the IO's aggregate, tap and IOProc are gone with the old coreaudiod
+    evaluate();   // the new one may not have published the devices yet: blocked until it has
+}
+
 void EngineController::tick() {
     const double now = now_();
     if (ioOpen_ && !demand_ && now - demandOffSince_ >= kStopGraceSeconds) {

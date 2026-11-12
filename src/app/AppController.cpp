@@ -1,5 +1,6 @@
 #include "app/AppController.h"
 
+#include "platform/mac/AggregateIO.h"
 #include "platform/mac/DriverInstaller.h"
 #include "platform/mac/LoginItem.h"
 
@@ -36,7 +37,9 @@ AppController::AppController(Options options)
                           });
                       }),
       defaultOutputWatcher_(kAudioObjectSystemObject, systemProperty(kAudioHardwarePropertyDefaultOutputDevice),
-                            [this] { post([](AppController& c) { c.engine_.onDefaultOutputChanged(); }); }) {
+                            [this] { post([](AppController& c) { c.engine_.onDefaultOutputChanged(); }); }),
+      serviceWatcher_(kAudioObjectSystemObject, systemProperty(kAudioHardwarePropertyServiceRestarted),
+                      [this] { post([](AppController& c) { c.handleServiceRestart(); }); }) {
     // Prepare before restoring, so the factory and the plugins see the real rate and block size.
     // The AEC is prepared too, for the latency estimate while the IO is closed (the backend
     // prepares both again on its first open).
@@ -105,6 +108,15 @@ void AppController::post(std::function<void(AppController&)> action) {
     juce::MessageManager::callAsync([weak = juce::WeakReference<AppController>(this), fn = std::move(action)] {
         if (auto* self = weak.get()) fn(*self);
     });
+}
+
+void AppController::handleServiceRestart() {
+    ++serviceRestarts_;
+    // The watchers are left alone: the HAL client registers them again with the new coreaudiod by
+    // itself (measured, docs/notes/aggregate.md); removing and adding them here raced with that and
+    // once left this process with a device list that no longer changed.
+    engine_.onServiceRestarted();   // the IO died with the old coreaudiod: closed, re-evaluated
+    notify();                       // the device list is being rebuilt
 }
 
 void AppController::timerCallback() {
@@ -243,6 +255,20 @@ LatencyBreakdown AppController::latency() const {
 
 std::vector<mac::AudioDeviceInfo> AppController::inputDevices() const { return mac::listInputDevices(); }
 
+juce::String AppController::ioDiagnostics() const {
+    juce::String text;
+    if (const auto* io = backend_.io()) {
+        const auto stats = io->stats();
+        text << "io aggregate " << static_cast<int>(io->deviceId()) << ", "
+             << juce::String(static_cast<juce::int64>(stats.callbacks)) << " callbacks, "
+             << juce::String(static_cast<juce::int64>(stats.frames)) << " frames, tap "
+             << (backend_.tapActive() ? "on" : "off");
+    } else {
+        text << "io closed";
+    }
+    return text << ", Core Audio restarts handled " << serviceRestarts_;
+}
+
 // ---- platform services ------------------------------------------------------------------------
 
 mac::Permission AppController::microphonePermission() const { return mac::microphonePermission(); }
@@ -260,19 +286,29 @@ bool AppController::driverOperationInProgress() const { return mac::driverOperat
 void AppController::installDriver(DriverCompletion done) {
     // mac:: completions already run on the main queue; the weak reference keeps them out after
     // destruction.
-    mac::installDriverAsync([weak = juce::WeakReference<AppController>(this), done](bool ok, juce::String error) {
-        if (auto* self = weak.get()) self->driverOperationDone(ok, error, done);
+    mac::installDriverAsync([weak = juce::WeakReference<AppController>(this), done,
+                             restarts = serviceRestarts_](bool ok, juce::String error) {
+        if (auto* self = weak.get()) self->driverOperationDone(ok, error, restarts, done);
     });
 }
 
 void AppController::uninstallDriver(DriverCompletion done) {
-    mac::uninstallDriverAsync([weak = juce::WeakReference<AppController>(this), done](bool ok, juce::String error) {
-        if (auto* self = weak.get()) self->driverOperationDone(ok, error, done);
+    mac::uninstallDriverAsync([weak = juce::WeakReference<AppController>(this), done,
+                               restarts = serviceRestarts_](bool ok, juce::String error) {
+        if (auto* self = weak.get()) self->driverOperationDone(ok, error, restarts, done);
     });
 }
 
-void AppController::driverOperationDone(bool ok, const juce::String& error, const DriverCompletion& done) {
-    engine_.onMicListChanged();   // DriverMissing <-> Idle / Running
+void AppController::driverOperationDone(bool ok, const juce::String& error, int restartsBefore,
+                                        const DriverCompletion& done) {
+    // A successful operation restarted coreaudiod (an uninstall with nothing installed did not, and
+    // then no IO is open). Its notification normally arrived seconds ago: the old daemon dies at
+    // the end of the script, the completion waits for fixomic Mic to (dis)appear. If it has not
+    // been handled, handle the restart here rather than trust the open IO.
+    if (ok && serviceRestarts_ == restartsBefore)
+        handleServiceRestart();
+    else
+        engine_.onMicListChanged();   // DriverMissing <-> Idle / Running
     if (done) done(ok, error);
     notify();
 }

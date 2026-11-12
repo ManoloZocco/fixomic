@@ -1,5 +1,7 @@
 #pragma once
 
+#include <juce_core/juce_core.h>
+
 #include <functional>
 
 namespace fixomic::mac {
@@ -28,8 +30,10 @@ Permission systemAudioPermission();
 // Raises the System Audio Recording prompt without blocking the caller: on a background queue it
 // creates a throwaway system audio tap in a private aggregate and an IOProc on it (the call that
 // shows the prompt and blocks until the user answers; creating the tap alone does not), then
-// destroys them. The completion runs on the main queue once that returned (prompt answered, or no
-// prompt needed); it does not tell the outcome (the preflight above is stale in this process).
-void requestSystemAudio(std::function<void()> completion);
+// destroys them. The completion runs on the main queue once that returned. ok = the IOProc was
+// created (prompt answered, or no prompt needed); it does not tell the outcome (the preflight above
+// is stale in this process). ok = false with `error` = a step failed (e.g. Core Audio restarting):
+// the prompt may not have been shown.
+void requestSystemAudio(std::function<void(bool ok, juce::String error)> completion);
 
 } // namespace fixomic::mac

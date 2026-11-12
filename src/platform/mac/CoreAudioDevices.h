@@ -32,7 +32,9 @@ std::vector<AudioDeviceInfo> listInputDevices();
 std::optional<AudioObjectID> findDeviceByUid(const juce::String& uid);
 
 // RAII wrapper around AudioObjectAddPropertyListenerBlock. The callback runs on the main queue
-// and never after the watcher has been destroyed (destroy it on the main thread).
+// and never after the watcher has been destroyed (destroy it on the main thread). The HAL calls the
+// listener on a private serial queue that forwards to the main queue, so destroying a watcher never
+// waits for the main queue: safe while Core Audio tears the object down (see CoreAudioDevices.mm).
 class PropertyWatcher {
 public:
     PropertyWatcher(AudioObjectID object, AudioObjectPropertyAddress address, std::function<void()> callback);

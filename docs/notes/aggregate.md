@@ -53,6 +53,29 @@ zeroed every cycle. Streams must be interleaved 32-bit float (checked).
   process (launchd job).
 - Mic startup transient: the combo-jack mic delivers a pop up to +5 dBFS within the first ~0.5 s after
   `AudioDeviceStart`. The engine should mute or fade in the first cycles.
+- **coreaudiod restart** (the driver installer's `killall coreaudiod`, or anything else). Measured on
+  macOS 27.2 with a scratch probe (private aggregate on fixomic Bridge + IOProc, then
+  `killall -9 coreaudiod`): within ~10 ms the client gets the aggregate's `IsAlive`, the system
+  object's `Devices` and `kAudioHardwarePropertyServiceRestarted` notifications, with an empty device
+  list; the IOProc stops being called; the aggregate's UID no longer resolves and its id answers
+  `'!obj'`. The devices come back ~2.5 s later (new ids, `Devices` and `DefaultOutputDevice` fire:
+  the system object listeners survived, although AudioHardware.h says a client must re-establish
+  them; the HAL client registers them with the new daemon itself). Stopping / destroying the old
+  IOProc answers `'!dev'`; destroying the old aggregate id answers `noErr`. So fixomic treats
+  ServiceRestarted as "the IO is dead" (`EngineController::onServiceRestarted`) and destroys an
+  aggregate only while its id still carries the UID fixomic gave it. It does not re-register its
+  listeners: in one app run that removed and re-added them ~2 s after the kill (while the client was
+  reconnecting) the process's device list stopped changing (the headset mic, back for other
+  processes, stayed missing; a new device went unnoticed) until the next restart.
+- **Never use the main queue as listener queue** (`PropertyWatcher`). A dying object's last
+  notifications are delivered with `dispatch_sync` on the listener queue while the HAL holds the
+  object's lock, and `AudioObjectRemovePropertyListenerBlock` waits for that lock: removing a
+  main-queue listener on the main thread during the teardown deadlocks. Seen after
+  `killall coreaudiod` (closing the IO froze the app: main thread in `HALObject::RemovePropertyListener`,
+  the HAL notification thread in `HALDevice::Teardown` → `dispatch_sync` to the main queue); also
+  reproduced by destroying an aggregate while a watcher on it is being destroyed (test "PropertyWatcher
+  can be destroyed while Core Audio tears its object down"). Listener blocks run on a private serial
+  queue and forward to the main queue.
 
 ## Contingency (two aggregates)
 

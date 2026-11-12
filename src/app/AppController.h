@@ -24,7 +24,15 @@ namespace fixomic {
 
 // The running app: owns the config, the plugin catalog and chain, the DSP graph and the on-demand
 // engine, and wires the platform events (demand on fixomic Mic, device list, default output,
-// wake, device lost) into the engine.
+// wake, device lost, Core Audio restarted) into the engine.
+//
+// Core Audio restart (kAudioHardwarePropertyServiceRestarted: coreaudiod restarted by a driver
+// install / uninstall, or by anything else): the engine closes the dead IO and re-evaluates
+// (EngineController::onServiceRestarted). The HAL listeners survive the restart (the HAL client
+// registers them with the new daemon itself, measured on macOS 27.2): they are not re-registered.
+// A driver operation that succeeded restarted coreaudiod: if its notification has not been handled
+// by the time the operation completes, the completion handles the restart itself, so the engine
+// never stays Running on the IO of the old daemon.
 //
 // Startup: config loaded, chain prepared for 48 kHz / config.bufferSize and then restored (plugins
 // that fail to load stay as missing slots, see startupWarnings()), engine configured, demand
@@ -100,6 +108,9 @@ public:
     // Of the open IO; when closed, an estimate from the config (no device frames).
     LatencyBreakdown latency() const;
     std::vector<mac::AudioDeviceInfo> inputDevices() const;
+    // One line about the open IO (aggregate id, IOProc callbacks, tap) and the Core Audio restarts
+    // handled so far; for logs and the --status developer command.
+    juce::String ioDiagnostics() const;
 
     // ---- platform services (permissions, driver, login item) ---------------------------------
     using DriverCompletion = std::function<void(bool ok, juce::String error)>;
@@ -135,7 +146,8 @@ private:
     void changed();          // schedule a save and notify
     void notify();
     void scheduleSave();
-    void driverOperationDone(bool ok, const juce::String& error, const DriverCompletion&);
+    void driverOperationDone(bool ok, const juce::String& error, int restartsBefore, const DriverCompletion&);
+    void handleServiceRestart();
 
     ConfigStore store_;
     Config config_;
@@ -150,6 +162,8 @@ private:
     mac::WakeObserver wake_;
     mac::PropertyWatcher devicesWatcher_;
     mac::PropertyWatcher defaultOutputWatcher_;
+    mac::PropertyWatcher serviceWatcher_;   // kAudioHardwarePropertyServiceRestarted
+    int serviceRestarts_ = 0;               // handled so far
 
     std::vector<juce::String> startupWarnings_;
     juce::String lastWarning_;

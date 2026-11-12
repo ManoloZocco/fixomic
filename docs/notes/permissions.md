@@ -74,7 +74,12 @@ Findings:
     AppController re-evaluates the engine at once; from then on the tap is created as usual, even
     though the preflight still says "not determined" (finding 2). When permission was already
     granted but the SPI is missing, the throwaway IO returns in milliseconds: one extra aggregate
-    at the first start, no prompt.
+    at the first start, no prompt. If the throwaway IO fails (tap, aggregate or IOProc creation,
+    e.g. while coreaudiod restarts) the prompt may not have been shown, so the main thread must
+    not be the first to create a tap IOProc: the callback reports the failure, the re-evaluation
+    opens the IO without the tap (AEC inactive, `onWarning` "Audio di sistema non disponibile, la
+    cancellazione dell'eco è disattivata: <reason>") and the next open asks again in the
+    background.
 - **Silence fallback** (unless the preflight says Granted): while an IO with a tap is open, a 1 s
   main-queue timer checks whether the IO thread saw any non-zero reference sample and whether the
   default output device `IsRunningSomewhere`. 10 s of running output with a silent tap

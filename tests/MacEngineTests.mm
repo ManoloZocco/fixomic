@@ -19,6 +19,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <thread>
 #include <vector>
 
 namespace mac = fixomic::mac;
@@ -103,6 +104,35 @@ TEST_CASE("WakeObserver calls back on NSWorkspaceDidWakeNotification", "[wake]")
     [NSWorkspace.sharedWorkspace.notificationCenter postNotificationName:NSWorkspaceDidWakeNotification object:nil];
     pumpMainLoop(0.2, [] { return false; });
     REQUIRE(wakes == 1);   // destroyed: no more callbacks
+}
+
+TEST_CASE("PropertyWatcher can be destroyed while Core Audio tears its object down", "[devices]")
+{
+    // A dying object's last notifications are delivered by the HAL with dispatch_sync on the
+    // listener's queue while it holds the object's lock, and removing a listener waits for that
+    // lock. With the main queue as listener queue, destroying a watcher on the main thread then
+    // deadlocks (seen after `killall coreaudiod`: closing the IO froze the app).
+    NSDictionary* description = @{
+        @kAudioAggregateDeviceNameKey : @"fixomic test teardown",
+        @kAudioAggregateDeviceUIDKey : [@"fixomic_test_teardown_" stringByAppendingString:NSUUID.UUID.UUIDString],
+        @kAudioAggregateDeviceIsPrivateKey : @1,
+    };
+    AudioObjectID aggregate = kAudioObjectUnknown;
+    REQUIRE(AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)description, &aggregate) == noErr);
+    int calls = 0;
+    auto watcher = std::make_unique<mac::PropertyWatcher>(
+        aggregate,
+        AudioObjectPropertyAddress{kAudioDevicePropertyDeviceIsAlive, kAudioObjectPropertyScopeGlobal,
+                                   kAudioObjectPropertyElementMain},
+        [&] { ++calls; });
+    REQUIRE(watcher->isListening());
+
+    AudioHardwareDestroyAggregateDevice(aggregate);
+    // The main queue is not serviced meanwhile: the teardown notification is in flight.
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    watcher.reset();   // must return
+    pumpMainLoop(0.3, [] { return false; });
+    REQUIRE(calls == 0);   // destroyed before the main queue ran: never called
 }
 
 TEST_CASE("DemandMonitor reports a reader of fixomic Mic within one poll", "[demand][hardware]")
@@ -365,10 +395,10 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
 
     mac::Permission status = mac::Permission::NotDetermined;
     int requests = 0;
-    std::function<void()> pendingCompletion;
+    std::function<void(bool, juce::String)> pendingCompletion;
     mac::SystemAudioAccess audio{
         [&] { return status; },
-        [&](std::function<void()> done) {
+        [&](std::function<void(bool, juce::String)> done) {
             ++requests;
             pendingCompletion = std::move(done);
         },
@@ -394,7 +424,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         REQUIRE(error.contains("not found"));
 
         REQUIRE(pendingCompletion);
-        pendingCompletion();
+        pendingCompletion(true, {});
         REQUIRE(answers == 1);
 
         // Still "not determined" (the preflight is stale after the prompt): proceeds anyway.
@@ -402,6 +432,35 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         REQUIRE(error.contains("not found"));
         REQUIRE(requests == 1);
         REQUIRE(warnings.empty());
+    }
+    SECTION("the throwaway IO fails: opens without the tap, warns, asks again on a later open")
+    {
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error == "In attesa del permesso per l'audio di sistema");
+        REQUIRE(requests == 1);
+
+        // The prompt may not have been shown (e.g. Core Audio restarting): a tap IOProc created
+        // now, on the main thread, could raise it there. Re-evaluated at once, without the tap.
+        REQUIRE(pendingCompletion);
+        pendingCompletion(false, "AudioHardwareCreateProcessTap failed: '!obj'");
+        REQUIRE(answers == 1);
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error.contains("not found"));   // the aggregate was attempted
+        REQUIRE(warnings.size() == 1);
+        REQUIRE(warnings[0].startsWith("Audio di sistema non disponibile"));
+        REQUIRE(warnings[0].contains("AudioHardwareCreateProcessTap failed"));
+        REQUIRE(requests == 1);
+
+        // The next open asks again (in the background) instead of creating the tap itself.
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error == "In attesa del permesso per l'audio di sistema");
+        REQUIRE(requests == 2);
+        pendingCompletion(true, {});
+        REQUIRE(answers == 2);
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error.contains("not found"));
+        REQUIRE(requests == 2);
+        REQUIRE(warnings.size() == 1);
     }
     SECTION("denied: opens without the tap and warns")
     {

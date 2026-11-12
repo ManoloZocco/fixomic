@@ -84,6 +84,7 @@ juce::String fourCharCode(UInt32 code)
 struct AggregateIO::Impl {
     AggregateIO* owner = nullptr;
     AudioObjectID aggregate = kAudioObjectUnknown;
+    juce::String aggregateUid;
     AudioObjectID mic = kAudioObjectUnknown;
     AudioObjectID bridge = kAudioObjectUnknown;
     juce::String micUid;
@@ -123,7 +124,10 @@ struct AggregateIO::Impl {
             AudioDeviceDestroyIOProcID(aggregate, procId);
         }
         watchers.clear();
-        if (aggregate != kAudioObjectUnknown)
+        // After a Core Audio restart the aggregate is gone and its id may name another device of the
+        // new coreaudiod (e.g. the user's own aggregate): destroy it only while it is still ours.
+        if (aggregate != kAudioObjectUnknown
+            && util::getString(aggregate, kAudioDevicePropertyDeviceUID) == aggregateUid)
             AudioHardwareDestroyAggregateDevice(aggregate);
     }
 
@@ -298,6 +302,7 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
         NSString* micUid = (__bridge_transfer NSString*)params.micUid.toCFString();
         NSString* bridgeUid = (__bridge_transfer NSString*)juce::String(devices::kBridgeUid).toCFString();
         NSString* aggregateUid = [@"fixomic_aggregate_" stringByAppendingString:NSUUID.UUID.UUIDString];
+        s.aggregateUid = util::toString((__bridge CFStringRef)aggregateUid);
         NSMutableDictionary* description = [@{
             @kAudioAggregateDeviceNameKey : @"fixomic Aggregate",
             @kAudioAggregateDeviceUIDKey : aggregateUid,

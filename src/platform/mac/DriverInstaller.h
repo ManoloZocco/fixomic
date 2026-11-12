@@ -37,15 +37,17 @@ bool isDriverUpdate(const juce::String& bundled, const juce::String& installed);
 using DriverCompletion = std::function<void(bool ok, juce::String error)>;
 
 // Copies the bundled driver over kInstalledDriverPath through NSAppleScript "do shell script ...
-// with administrator privileges" (rm + ditto + chown root:wheel, then coreaudiod restarted with
-// killall, or launchctl kickstart if killall fails), then waits up to kDriverWaitSeconds for fixomic
-// Mic to appear. Everything runs on a background queue: the authorization dialog is modal and the
-// script blocks until it is answered. Only fixomic.driver is touched in the HAL folder.
+// with administrator privileges" (rm + ditto, quarantine removed from the copy, chown root:wheel,
+// then coreaudiod restarted with killall, or launchctl kickstart if killall fails), then waits up to
+// kDriverWaitSeconds for fixomic Mic to appear. Everything runs on a background queue: the
+// authorization dialog is modal and the script blocks until it is answered. Only fixomic.driver is
+// touched in the HAL folder.
 void installDriverAsync(DriverCompletion);
 // Removes kInstalledDriverPath (same mechanism) and waits up to kDriverWaitSeconds for fixomic Mic
 // to disappear.
 void uninstallDriverAsync(DriverCompletion);
-// An install / uninstall is running (a second one fails at once with an error).
+// An install / uninstall is running (a second one fails at once with an error): from the call
+// until its completion starts on the main queue.
 bool driverOperationInProgress();
 
 // ---- building blocks (pure, unit-tested) -------------------------------------------------------

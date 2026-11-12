@@ -26,6 +26,10 @@ struct FakeBackend : EngineBackend {
         bool operator==(const Flags&) const = default;
     };
     std::vector<Flags> flags;         // every applyFlags call
+    int serviceGeneration = 0;        // Core Audio restarts so far (set by the test)
+    int ioGeneration = -1;            // serviceGeneration when the open IO was opened
+
+    bool ioFresh() const { return open && ioGeneration == serviceGeneration; }
 
     bool driverInstalled() override { return driver; }
     bool micAvailable(const juce::String& uid) override { micAsked = uid; return mic; }
@@ -38,6 +42,7 @@ struct FakeBackend : EngineBackend {
             return false;
         }
         open = true;
+        ioGeneration = serviceGeneration;
         return true;
     }
     void closeIO() override {
@@ -391,6 +396,67 @@ TEST_CASE("EngineController device lost reopens the IO while in demand", "[engin
     REQUIRE(rig.backend.closes == 2);
     REQUIRE(rig.backend.opens == 2);
     REQUIRE(rig.engine.state() == EngineState::Idle);
+}
+
+TEST_CASE("EngineController Core Audio restart rebuilds the open IO", "[engine]") {
+    // coreaudiod restarted (a driver install / uninstall, or anything else): every object of the
+    // open IO died with it. The fake counts restarts; an IO is fresh when opened after the last one.
+    Rig rig;
+    auto restart = [&] {
+        ++rig.backend.serviceGeneration;
+        rig.engine.onServiceRestarted();
+    };
+    rig.engine.onDemandChanged(true);
+    REQUIRE(rig.engine.state() == EngineState::Running);
+    REQUIRE(rig.backend.ioFresh());
+
+    SECTION("devices back at once: closed and reopened, even right after an open") {
+        rig.now = 0.2;   // within kLostAfterOpenSeconds: a restart is not throttled like a device lost
+        restart();
+        REQUIRE(rig.backend.closes == 1);
+        REQUIRE(rig.backend.opens == 2);
+        REQUIRE(rig.engine.state() == EngineState::Running);
+        REQUIRE(rig.backend.ioFresh());
+    }
+    SECTION("devices not published yet: blocked, then reopened when they appear") {
+        rig.runUntil(5.0);
+        rig.backend.driver = false;   // the new coreaudiod has not loaded the driver yet
+        restart();
+        REQUIRE(rig.backend.closes == 1);
+        REQUIRE_FALSE(rig.backend.open);
+        REQUIRE(rig.engine.state() == EngineState::DriverMissing);
+
+        rig.backend.driver = true;
+        rig.engine.onMicListChanged();
+        REQUIRE(rig.engine.state() == EngineState::Running);
+        REQUIRE(rig.backend.ioFresh());
+    }
+    SECTION("the reopen fails: Error, retried by tick()") {
+        rig.runUntil(5.0);
+        rig.backend.openFails = true;
+        restart();
+        REQUIRE(rig.engine.state() == EngineState::Error);
+        REQUIRE_FALSE(rig.backend.open);
+        rig.backend.openFails = false;
+        rig.runUntil(5.0 + EngineController::kRetrySeconds + 0.1);
+        REQUIRE(rig.engine.state() == EngineState::Running);
+        REQUIRE(rig.backend.ioFresh());
+    }
+    SECTION("no demand (grace period): closed, not reopened") {
+        rig.engine.onDemandChanged(false);
+        restart();
+        REQUIRE(rig.backend.closes == 1);
+        REQUIRE(rig.backend.opens == 1);
+        REQUIRE(rig.engine.state() == EngineState::Idle);
+    }
+    // Never Running on an IO opened before the last restart.
+    REQUIRE((rig.engine.state() != EngineState::Running || rig.backend.ioFresh()));
+
+    Rig idle;
+    idle.engine.onServiceRestarted();   // nothing open, no demand: nothing to do
+    REQUIRE(idle.backend.opens == 0);
+    REQUIRE(idle.backend.closes == 0);
+    REQUIRE(idle.engine.state() == EngineState::Idle);
 }
 
 TEST_CASE("EngineController rebuilds the IO only for IO-shaping config changes", "[engine]") {

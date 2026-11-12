@@ -63,8 +63,11 @@ bool waitForMic(bool present)
 // queue once the background block has returned.
 void finish(DriverCompletion completion, bool ok, juce::String error)
 {
-    operationRunning = false;
     dispatch_async(dispatch_get_main_queue(), ^{
+        // Cleared on the main queue: until the completion runs (and the engine re-checks the
+        // devices) the operation is still in progress. Cleared before it, so the completion and the
+        // UI it refreshes see none running and may start the next one.
+        operationRunning = false;
         if (completion)
             completion(ok, error);
     });
@@ -193,8 +196,12 @@ juce::String install(const juce::String& source, const juce::String& destination
     script << "set src to " << appleScriptString(source) << "\n"
            << "set dst to " << appleScriptString(destination) << "\n"
            << "set dir to " << appleScriptString(parent) << "\n";
+    // A driver from a downloaded release carries com.apple.quarantine. `ditto --noqtn` does not
+    // propagate quarantine, but still copies the attribute the source already has (macOS 27.2), so
+    // it is removed from the copy explicitly (-s: symbolic links themselves, never their targets).
     juce::String command = "\"/bin/mkdir -p \" & quoted form of dir & \" && /bin/rm -rf \" & quoted form of dst"
-                           " & \" && /usr/bin/ditto \" & quoted form of src & \" \" & quoted form of dst";
+                           " & \" && /usr/bin/ditto --noqtn \" & quoted form of src & \" \" & quoted form of dst"
+                           " & \" && /usr/bin/xattr -drs com.apple.quarantine \" & quoted form of dst";
     if (options.administrator)
         command << " & \" && /usr/sbin/chown -R root:wheel \" & quoted form of dst";
     command << " & \" && /bin/chmod -R go-w \" & quoted form of dst" << restartTail(options);

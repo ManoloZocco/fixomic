@@ -40,7 +40,8 @@ struct EngineBackend {
 // A failed openIO() -> Error (lastError()), retried every kRetrySeconds from tick() while there is
 // demand, and on every event; without demand a failure ends in Idle (lastError() keeps the reason).
 // A device lost within kLostAfterOpenSeconds of a successful open is not reopened at once (that
-// could loop): Error, retried by tick() like a failed open.
+// could loop): Error, retried by tick() like a failed open. A Core Audio restart always closes the
+// IO (it is dead, whatever the state says) and re-evaluates.
 //
 // Global bypass keeps the IO and its tap (the graph just skips AEC and chain), so toggling it is
 // instant: applied through EngineBackend::applyFlags().
@@ -67,6 +68,10 @@ public:
     void onDefaultOutputChanged();   // IO open with a tap -> rebuilt in place, state stays Running
     void onDeviceLost();             // IO closed, devices re-checked, reopened on demand
     void onSystemWake();             // IO open -> closed and reopened; Idle -> nothing
+    // Core Audio restarted (coreaudiod: a driver install / uninstall, or any other cause): the open
+    // IO died with it. Closed and the devices re-checked; reopened on demand. Unlike onDeviceLost()
+    // never throttled: the restart is a one-off event, not something the open caused.
+    void onServiceRestarted();
     void tick();                     // every ~200 ms: grace period and Error retries
 
     EngineState state() const;

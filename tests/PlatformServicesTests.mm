@@ -7,6 +7,8 @@
 
 #import <Foundation/Foundation.h>
 
+#include <sys/xattr.h>
+
 #include <atomic>
 #include <chrono>
 #include <thread>
@@ -49,7 +51,8 @@ TEST_CASE("install and uninstall scripts pass paths only through quoted form of"
     REQUIRE(install.contains("set src to " + script::appleScriptString(src)));
     REQUIRE(install.contains("set dst to \"/Library/Audio/Plug-Ins/HAL/fixomic.driver\""));
     REQUIRE(install.contains("set dir to \"/Library/Audio/Plug-Ins/HAL\""));
-    REQUIRE(install.contains("/usr/bin/ditto \" & quoted form of src & \" \" & quoted form of dst"));
+    REQUIRE(install.contains("/usr/bin/ditto --noqtn \" & quoted form of src & \" \" & quoted form of dst"));
+    REQUIRE(install.contains("/usr/bin/xattr -drs com.apple.quarantine \" & quoted form of dst"));
     REQUIRE(install.contains("/bin/rm -rf \" & quoted form of dst"));
     REQUIRE(install.contains("/usr/sbin/chown -R root:wheel"));
     REQUIRE(install.contains("killall coreaudiod || /bin/launchctl kickstart -k system/com.apple.audio.coreaudiod"));
@@ -67,16 +70,51 @@ TEST_CASE("install and uninstall scripts pass paths only through quoted form of"
     REQUIRE_FALSE(plain.contains("coreaudiod"));
 }
 
+namespace {
+
+constexpr const char* kQuarantine = "com.apple.quarantine";
+
+bool quarantined(const juce::File& file)
+{
+    return getxattr(file.getFullPathName().toRawUTF8(), kQuarantine, nullptr, 0, 0, XATTR_NOFOLLOW) >= 0;
+}
+
+bool quarantine(const juce::File& file)
+{
+    // What a browser / Archive Utility puts on every file of a downloaded release.
+    const char value[] = "0083;6af60800;Safari;8E5A1B2C-1111-2222-3333-444455556666";
+    return setxattr(file.getFullPathName().toRawUTF8(), kQuarantine, value, sizeof(value) - 1, 0, XATTR_NOFOLLOW) == 0;
+}
+
+// A uniquely named temporary directory, removed at the end of the scope (test processes may run
+// concurrently).
+struct TempDirectory {
+    juce::File root;
+    explicit TempDirectory(const juce::String& prefix)
+        : root(juce::File::getSpecialLocation(juce::File::tempDirectory)
+                   .getChildFile(prefix + " " + juce::Uuid().toDashedString()))
+    {
+    }
+    ~TempDirectory() { root.deleteRecursively(); }
+};
+
+} // namespace
+
 TEST_CASE("install and uninstall scripts work with spaces, quotes and shell characters", "[driver][installer]")
 {
     // The same scripts, without administrator privileges and without the coreaudiod restart,
     // on temporary paths full of characters a naive quoting would break on.
-    const auto root = juce::File::createTempFile("").getSiblingFile("fixomic installer test 'q' \"dq\" $HOME `x` \\b");
-    root.deleteRecursively();
+    const TempDirectory temp("fixomic installer test 'q' \"dq\" $HOME `x` \\b");
+    const auto& root = temp.root;
     REQUIRE(root.createDirectory());
     const auto source = root.getChildFile("src dir 'a'/fixomic.driver");
-    REQUIRE(source.getChildFile("Contents").createDirectory());
+    REQUIRE(source.getChildFile("Contents/MacOS").createDirectory());
     REQUIRE(source.getChildFile("Contents/Info.plist").replaceWithText("plist"));
+    REQUIRE(source.getChildFile("Contents/MacOS/fixomic").replaceWithText("binary"));
+    // A driver from a downloaded (quarantined) release: the installed copy must not stay quarantined.
+    for (const auto& file : {source, source.getChildFile("Contents"), source.getChildFile("Contents/Info.plist"),
+                             source.getChildFile("Contents/MacOS"), source.getChildFile("Contents/MacOS/fixomic")})
+        REQUIRE(quarantine(file));
     const auto destination = root.getChildFile("HAL \"dest\" $(echo no)/fixomic.driver");
     REQUIRE(destination.getChildFile("Contents/old.txt").create());   // replaced, not merged
 
@@ -86,14 +124,20 @@ TEST_CASE("install and uninstall scripts work with spaces, quotes and shell char
     REQUIRE(destination.getChildFile("Contents/Info.plist").loadFileAsString() == "plist");
     REQUIRE_FALSE(destination.getChildFile("Contents/old.txt").exists());
     REQUIRE(source.getChildFile("Contents/Info.plist").exists());
+    for (const auto& file : {destination, destination.getChildFile("Contents"),
+                             destination.getChildFile("Contents/Info.plist"),
+                             destination.getChildFile("Contents/MacOS"),
+                             destination.getChildFile("Contents/MacOS/fixomic")}) {
+        INFO(file.getFullPathName());
+        REQUIRE_FALSE(quarantined(file));
+    }
+    REQUIRE(quarantined(source.getChildFile("Contents/Info.plist")));   // the source is left alone
 
     result = script::run(script::uninstall(destination.getFullPathName(), {false, false}));
     REQUIRE(result.ok);
     REQUIRE_FALSE(destination.exists());
     REQUIRE(destination.getParentDirectory().isDirectory());   // only the driver bundle goes
     REQUIRE(source.isDirectory());
-
-    REQUIRE(root.deleteRecursively());
 }
 
 TEST_CASE("driver_script::run reports AppleScript errors", "[driver][installer]")
@@ -183,18 +227,22 @@ TEST_CASE("driver operations run off the main thread, one at a time, and complet
 {
     std::atomic<bool> release{false};
     std::atomic<bool> workOnMain{true};
+    std::atomic<bool> workReturning{false};
     std::vector<std::pair<bool, juce::String>> results;
     bool completionOnMain = false;
+    bool inProgressInCompletion = true;
 
     script::runOperation(
         [&](bool ok, juce::String error) {
             completionOnMain = [NSThread isMainThread];
+            inProgressInCompletion = mac::driverOperationInProgress();
             results.emplace_back(ok, error);
         },
         [&]() -> juce::String {
             workOnMain = [NSThread isMainThread];
             while (!release)
                 std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            workReturning = true;
             return juce::String("boom ") + juce::String(42);   // a heap string, freed if captured badly
         });
     REQUIRE(mac::driverOperationInProgress());
@@ -212,11 +260,22 @@ TEST_CASE("driver operations run off the main thread, one at a time, and complet
     REQUIRE(results[0].second.contains("in corso"));
 
     release = true;
+    // The work has returned on its background thread, the main queue has not run yet: until the
+    // completion runs (AppController re-checks the engine there) the operation is in progress.
+    while (!workReturning)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    REQUIRE(mac::driverOperationInProgress());
+    REQUIRE(results.size() == 1);
+
     pumpMainQueue(5.0, [&] { return results.size() == 2; });
     REQUIRE(results.size() == 2);
     REQUIRE_FALSE(results[1].first);
     REQUIRE(results[1].second == "boom 42");
     REQUIRE(completionOnMain);
+    // Cleared just before the completion: it (and the UI it refreshes) sees no operation running
+    // and may start the next one.
+    REQUIRE_FALSE(inProgressInCompletion);
     REQUIRE_FALSE(workOnMain);
     REQUIRE_FALSE(secondRan);
     REQUIRE_FALSE(mac::driverOperationInProgress());
