@@ -168,6 +168,8 @@ fixed by the spec: state sentence + bypass switch, route strip, notices, levels,
 cancellation, chain, latency, footer (Impostazioni… left, Esci right, text aligned to the content
 edges). Groups are separated by 12 pt, a 1 px hairline, 12 pt. Labels left, controls and values
 right-aligned on one row. The panel opens centred under the menu-bar icon, 6 pt below the menu bar.
+It is never taller than the display (8 pt from its bottom): a longer panel scrolls inside the
+window with the trackpad, without a scrollbar, its rounded ground following the visible part.
 
 ## Elevation & Depth
 
@@ -194,7 +196,8 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
   at 5 % / 10 %.
 - **Flat button** (`fixomic.style = flat`): text only; hover fill = hover step.
 - **Notice** (`NoticeRow`): amber tint (13 % light / 16 % dark) at 8 pt radius, caption text, an
-  "Apri Impostazioni" push button when a System Settings pane fixes it.
+  "Apri Impostazioni" push button when a System Settings pane fixes it. More than two startup
+  warnings merge into one row ("N avvisi all’avvio: …") elided with "…" at three lines.
 - **Menu-bar icon** (`TrayIcon::iconImage`): template image, 20 pt at 2x, 1.5 pt strokes: filled
   microphone (active), outline (waiting), outline crossed by a bar with cut-outs (bypass), outline
   with a knocked-out "!" badge (problem).
