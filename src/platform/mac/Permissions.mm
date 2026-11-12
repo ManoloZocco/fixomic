@@ -4,6 +4,7 @@
 #include "platform/mac/SystemAudioTap.h"
 
 #import <AVFoundation/AVFoundation.h>
+#import <AppKit/AppKit.h>
 #import <CoreAudio/CoreAudio.h>
 #import <Foundation/Foundation.h>
 
@@ -114,6 +115,20 @@ void requestSystemAudio(std::function<void(bool ok, juce::String error)> complet
                 completion(error.isEmpty(), error);
         });
     });
+}
+
+void openPrivacySettings(PrivacyPane pane)
+{
+    // The Privacy & Security anchors; on macOS 14.4+ Privacy_ScreenCapture is "Registrazione schermo
+    // e audio di sistema", which also lists the system-audio-only grants.
+    NSString* anchor = @"";
+    switch (pane) {
+    case PrivacyPane::Microphone: anchor = @"Privacy_Microphone"; break;
+    case PrivacyPane::SystemAudio: anchor = @"Privacy_ScreenCapture"; break;
+    }
+    NSString* text = [@"x-apple.systempreferences:com.apple.preference.security?" stringByAppendingString:anchor];
+    if (NSURL* url = [NSURL URLWithString:text])
+        [[NSWorkspace sharedWorkspace] openURL:url];
 }
 
 } // namespace fixomic::mac

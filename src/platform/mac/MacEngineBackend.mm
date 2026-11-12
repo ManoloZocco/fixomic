@@ -31,6 +31,7 @@ bool defaultOutputRunning()
 
 } // namespace
 
+const char* const MacEngineBackend::kWaitingForMicrophone = "In attesa del permesso per il microfono";
 const char* const MacEngineBackend::kWaitingForSystemAudio = "In attesa del permesso per l'audio di sistema";
 
 juce::String MacEngineBackend::systemAudioDeniedWarning()
@@ -105,6 +106,7 @@ bool MacEngineBackend::micSupports48k(const juce::String& uid)
 bool MacEngineBackend::openIO(bool withTap, juce::String& error)
 {
     closeIO();
+    pending_ = PendingPermission::None;
 
     // Never reach the HAL without microphone access: while the TCC prompt is up, creating the IO
     // proc blocks the calling (main) thread until the user answers.
@@ -118,7 +120,8 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
                     onMicrophonePermission(granted);
             });
         }
-        error = "In attesa del permesso per il microfono";
+        error = kWaitingForMicrophone;
+        pending_ = PendingPermission::Microphone;
         return false;
     case Permission::Denied:
         error = juce::String::fromUTF8("Permesso microfono negato: abilitalo in Impostazioni di Sistema \u2192 "
@@ -234,6 +237,7 @@ bool MacEngineBackend::checkSystemAudio(bool& withTap, juce::String& error)
         });
     }
     error = kWaitingForSystemAudio;
+    pending_ = PendingPermission::SystemAudio;
     return false;
 }
 
@@ -301,6 +305,11 @@ bool MacEngineBackend::ioOpen() const
 bool MacEngineBackend::tapActive() const
 {
     return io_ != nullptr && tap_ != nullptr;
+}
+
+PendingPermission MacEngineBackend::pendingPermission() const
+{
+    return pending_;
 }
 
 const AggregateIO* MacEngineBackend::io() const

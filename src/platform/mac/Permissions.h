@@ -36,4 +36,12 @@ Permission systemAudioPermission();
 // the prompt may not have been shown.
 void requestSystemAudio(std::function<void(bool ok, juce::String error)> completion);
 
+// ---- System Settings ---------------------------------------------------------------------------
+
+// The Privacy & Security panes that grant fixomic's permissions.
+enum class PrivacyPane { Microphone, SystemAudio };
+
+// Opens System Settings on that pane (Microfono / Registrazione schermo e audio di sistema).
+void openPrivacySettings(PrivacyPane);
+
 } // namespace fixomic::mac

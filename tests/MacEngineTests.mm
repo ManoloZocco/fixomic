@@ -364,10 +364,14 @@ TEST_CASE("MacEngineBackend asks for the microphone before touching the HAL", "[
     backend.onMicrophonePermission = [&](bool granted) { answers.push_back(granted); };
 
     juce::String error;
+    REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::None);
     REQUIRE_FALSE(backend.openIO(false, error));
     REQUIRE(error == "In attesa del permesso per il microfono");
+    REQUIRE(error == mac::MacEngineBackend::kWaitingForMicrophone);
+    REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::Microphone);
     REQUIRE(requests == 1);
     REQUIRE_FALSE(backend.openIO(false, error));   // retries do not ask again
+    REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::Microphone);
     REQUIRE(requests == 1);
     REQUIRE_FALSE(backend.ioOpen());
 
@@ -378,6 +382,7 @@ TEST_CASE("MacEngineBackend asks for the microphone before touching the HAL", "[
     status = mac::Permission::Denied;
     REQUIRE_FALSE(backend.openIO(false, error));
     REQUIRE(error.startsWith("Permesso microfono negato"));
+    REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::None);   // denied is an error
     REQUIRE(requests == 1);
 
     status = mac::Permission::Granted;   // now the HAL is reached
@@ -415,13 +420,15 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
     {
         REQUIRE_FALSE(backend.openIO(true, error));
         REQUIRE(error == "In attesa del permesso per l'audio di sistema");
+        REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::SystemAudio);
         REQUIRE(requests == 1);
         REQUIRE_FALSE(backend.openIO(true, error));   // retries while pending do not ask again
         REQUIRE(requests == 1);
 
-        // Without a tap there is nothing to ask.
+        // Without a tap there is nothing to ask; the open fails for another reason.
         REQUIRE_FALSE(backend.openIO(false, error));
         REQUIRE(error.contains("not found"));
+        REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::None);
 
         REQUIRE(pendingCompletion);
         pendingCompletion(true, {});

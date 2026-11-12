@@ -18,6 +18,7 @@
 #include <juce_events/juce_events.h>
 
 #include <functional>
+#include <optional>
 #include <vector>
 
 namespace fixomic {
@@ -37,7 +38,8 @@ namespace fixomic {
 // Startup: config loaded, chain prepared for 48 kHz / config.bufferSize and then restored (plugins
 // that fail to load stay as missing slots, see startupWarnings()), engine configured, demand
 // monitoring started, an incremental plugin scan started in the background. A 200 ms timer drives
-// EngineController::tick(), PluginChain::collectGarbage() and the debounced config save.
+// EngineController::tick(), PluginChain::collectGarbage() and the debounced config save, and
+// notifies when the AEC starts or stops processing (it changes latency()).
 //
 // Config: config() is the single source of truth, also for the engine backend. It is saved 1 s
 // after the last change (settings, chain structure, bypass, plugin state, an editor closed; at most
@@ -73,7 +75,13 @@ public:
     // ---- engine ------------------------------------------------------------------------------
     EngineState engineState() const;
     juce::String lastError() const;      // why the engine is in Error (or the last open failed)
+    // The permission prompt the last open attempt is waiting for: with it, Error means "waiting for
+    // the user", not a failure. None after a successful open or any other failure.
+    PendingPermission pendingPermission() const;
     juce::String lastWarning() const;    // last backend warning (e.g. no system audio tap), "" if none
+    // The System Settings pane that fixes lastWarning(): every backend warning is about the system
+    // audio reference (tap not created, permission denied, tap silent). nullopt without a warning.
+    std::optional<mac::PrivacyPane> lastWarningPane() const;
 
     // ---- config ------------------------------------------------------------------------------
     const Config& config() const;
@@ -116,6 +124,7 @@ public:
     using DriverCompletion = std::function<void(bool ok, juce::String error)>;
     mac::Permission microphonePermission() const;
     mac::Permission systemAudioPermission() const;   // NotDetermined also means "unknown"
+    void openPrivacySettings(mac::PrivacyPane) const;
     bool driverInstalled() const;                    // installed and fixomic Mic published
     juce::String bundledDriverVersion() const;       // "" when the app carries no driver
     juce::String installedDriverVersion() const;     // "" when not installed
@@ -132,6 +141,7 @@ public:
     bool setLaunchAtLogin(bool enabled, juce::String& error);
 
     // State, chain, config or catalog changed. Message thread, never from inside a call above.
+    // One handler: the app composes its consumers (log, menu-bar icon and panel) in it.
     std::function<void()> onModelChanged;
 
     static constexpr double kSampleRate = 48000.0;
@@ -164,6 +174,7 @@ private:
     mac::PropertyWatcher defaultOutputWatcher_;
     mac::PropertyWatcher serviceWatcher_;   // kAudioHardwarePropertyServiceRestarted
     int serviceRestarts_ = 0;               // handled so far
+    bool aecActive_ = false;                // as last notified (see timerCallback)
 
     std::vector<juce::String> startupWarnings_;
     juce::String lastWarning_;

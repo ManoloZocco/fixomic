@@ -51,10 +51,11 @@ struct SystemAudioAccess {
 //
 // Permissions, checked before any HAL call (the TCC prompts block the thread that triggers them,
 // see docs/notes/permissions.md):
-//   microphone not determined -> the prompt is raised once, openIO() fails with "In attesa del
-//     permesso per il microfono" until onMicrophonePermission; denied -> fails.
+//   microphone not determined -> the prompt is raised once, openIO() fails with
+//     kWaitingForMicrophone ("In attesa del permesso per il microfono") until
+//     onMicrophonePermission; denied -> fails. pendingPermission() says which prompt it waits for.
 //   system audio (only with a tap) not determined -> requestSystemAudio() raises the prompt once on
-//     a background queue, openIO() fails with "In attesa del permesso per l'audio di sistema" until
+//     a background queue, openIO() fails with kWaitingForSystemAudio until
 //     onSystemAudioPermission; afterwards the tap is created normally. If that throwaway IO failed
 //     (the prompt may not have been shown) the main thread never creates the tap in its place: the
 //     next openIO() opens without it (AEC inactive, onWarning says why) and the one after asks
@@ -92,6 +93,9 @@ public:
     std::optional<LatencyBreakdown> latency() const;
     bool ioOpen() const;
     bool tapActive() const;            // the open IO has a system audio reference
+    // The permission prompt that made the last openIO() fail (its error is then
+    // kWaitingForMicrophone / kWaitingForSystemAudio); None after a success or any other failure.
+    PendingPermission pendingPermission() const;
     const AggregateIO* io() const;     // diagnostics; nullptr when closed
 
     // The user answered the microphone prompt that openIO() raised. Main thread; re-evaluate the
@@ -114,6 +118,7 @@ public:
     static constexpr int kStartupFadeSamples = 960;     // 20 ms fade-in after it
     static constexpr double kSilenceCheckSeconds = 1.0;
 
+    static const char* const kWaitingForMicrophone;
     static const char* const kWaitingForSystemAudio;
     static juce::String systemAudioDeniedWarning();
     static juce::String systemAudioSilentWarning();
@@ -143,6 +148,7 @@ private:
     std::unique_ptr<SystemAudioTap> tap_;
     std::unique_ptr<AggregateIO> io_;   // destroyed before tap_
     int preparedBlock_ = 0;             // buffer size of the last successful prepare, 0 = none
+    PendingPermission pending_ = PendingPermission::None;   // of the last openIO()
 };
 
 } // namespace fixomic::mac

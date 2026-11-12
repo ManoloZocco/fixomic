@@ -10,6 +10,10 @@ namespace fixomic {
 
 enum class EngineState { Idle, Starting, Running, MicMissing, DriverMissing, UnsupportedSampleRate, Error };
 
+// The permission prompt an open attempt is waiting for (the engine then sits in Error until the
+// user answers): a waiting state for the UI, not a failure.
+enum class PendingPermission { None, Microphone, SystemAudio };
+
 const char* toString(EngineState) noexcept;
 
 // What the controller needs from the platform: device checks and opening / closing the audio IO.

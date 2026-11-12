@@ -122,6 +122,12 @@ void AppController::handleServiceRestart() {
 void AppController::timerCallback() {
     engine_.tick();
     chain_.collectGarbage();
+    // The open IO's latency counts the AEC only once it processes (from the first blocks after the
+    // open, or never without a reference): a model change for the panel's latency row.
+    if (const bool aecActive = backend_.ioOpen() && graph_.aecActive(); aecActive != aecActive_) {
+        aecActive_ = aecActive;
+        notify();
+    }
     if (firstUnsavedChange_ >= 0.0) {
         const double now = nowMs();
         if (now - lastChange_ >= kSaveDebounceMs || now - firstUnsavedChange_ >= kSaveMaxDelayMs) saveNow();
@@ -146,7 +152,13 @@ void AppController::notify() {
 
 EngineState AppController::engineState() const { return engine_.state(); }
 juce::String AppController::lastError() const { return engine_.lastError(); }
+PendingPermission AppController::pendingPermission() const { return backend_.pendingPermission(); }
 juce::String AppController::lastWarning() const { return lastWarning_; }
+
+std::optional<mac::PrivacyPane> AppController::lastWarningPane() const {
+    if (lastWarning_.isEmpty()) return std::nullopt;
+    return mac::PrivacyPane::SystemAudio;
+}
 
 // ---- config -----------------------------------------------------------------------------------
 
@@ -273,6 +285,7 @@ juce::String AppController::ioDiagnostics() const {
 
 mac::Permission AppController::microphonePermission() const { return mac::microphonePermission(); }
 mac::Permission AppController::systemAudioPermission() const { return mac::systemAudioPermission(); }
+void AppController::openPrivacySettings(mac::PrivacyPane pane) const { mac::openPrivacySettings(pane); }
 bool AppController::driverInstalled() const { return mac::driverInstalled(); }
 juce::String AppController::bundledDriverVersion() const { return mac::bundledDriverVersion(); }
 juce::String AppController::installedDriverVersion() const { return mac::installedDriverVersion(); }
