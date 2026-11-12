@@ -162,3 +162,41 @@ TEST_CASE("AggregateIO reports a mic sample rate change as device lost", "[aggre
     pumpMainLoop(0.3, [] { return false; });
     REQUIRE(lost == 1);
 }
+
+TEST_CASE("AggregateIO keeps a device-lost event that arrives before a handler is set", "[aggregate][hardware]")
+{
+    const juce::String mic = testMicUid();
+    const auto micId = fixomic::mac::findDeviceByUid(mic);
+    REQUIRE(micId.has_value());
+    const auto inputs = fixomic::mac::listInputDevices();
+    const auto info = std::find_if(inputs.begin(), inputs.end(), [&](const auto& d) { return d.uid == mic; });
+    REQUIRE(info != inputs.end());
+    if (std::find(info->sampleRates.begin(), info->sampleRates.end(), 44100.0) == info->sampleRates.end())
+        SKIP("microphone has no 44.1 kHz");
+
+    juce::String error;
+    auto io = AggregateIO::create({mic, 0, nullptr, 128}, [](const float*, const float*, float*, float*, int) {},
+                                  error);
+    REQUIRE(io != nullptr);
+
+    // No handler yet: the event must not be swallowed.
+    const AudioObjectPropertyAddress rate{kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal,
+                                          kAudioObjectPropertyElementMain};
+    Float64 value = 44100.0;
+    AudioObjectSetPropertyData(*micId, &rate, 0, nullptr, sizeof(value), &value);
+    pumpMainLoop(1.0, [] { return false; });
+
+    // The stale aggregate refuses to start...
+    REQUIRE_FALSE(io->start());
+    REQUIRE(io->lastError().contains("lost"));
+
+    // ...and a handler assigned later still hears about the next event.
+    int lost = 0;
+    io->onDeviceLost = [&] { ++lost; };
+    value = 48000.0;
+    AudioObjectSetPropertyData(*micId, &rate, 0, nullptr, sizeof(value), &value);
+    pumpMainLoop(2.0, [&] { return lost > 0; });
+    io.reset();
+    pumpMainLoop(0.3, [] { return false; });
+    REQUIRE(lost == 1);
+}

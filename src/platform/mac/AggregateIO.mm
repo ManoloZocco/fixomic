@@ -109,7 +109,8 @@ struct AggregateIO::Impl {
     std::atomic<std::uint32_t> lastFrames{0}, maxFrames{0};
     // Main queue only.
     std::uint64_t overloads = 0;
-    bool lostFired = false;
+    bool lostFired = false;    // delivered to a handler: never again
+    bool lostPending = false;  // happened while no handler was set
 
     std::vector<std::unique_ptr<PropertyWatcher>> watchers;
     juce::String lastError;
@@ -130,11 +131,15 @@ struct AggregateIO::Impl {
     {
         if (lostFired)
             return;
-        lostFired = true;
         // A copy, so the handler may destroy the AggregateIO (and this Impl) while it runs.
         const auto handler = owner->onDeviceLost;
-        if (handler)
-            handler();
+        if (!handler) {
+            // Not latched: a handler assigned later hears the next event, and start() refuses.
+            lostPending = true;
+            return;
+        }
+        lostFired = true;
+        handler();
     }
 
     static OSStatus ioProc(AudioObjectID, const AudioTimeStamp*, const AudioBufferList* input,
@@ -511,28 +516,43 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
             return nullptr;
         }
 
-        // Device-lost and overload notifications (main queue).
+        // Device-lost and overload notifications (main queue). Without the device-lost listeners
+        // a vanished device would go unnoticed, so failing to register one fails create(); the
+        // overload counter is diagnostic only.
         Impl* impl = &s;
-        auto watchAlive = [impl](AudioObjectID object) {
-            impl->watchers.push_back(std::make_unique<PropertyWatcher>(
-                object, util::address(kAudioDevicePropertyDeviceIsAlive), [impl, object] {
-                    if (util::getScalar<UInt32>(object, kAudioDevicePropertyDeviceIsAlive).value_or(0) == 0)
-                        impl->fireLost();
-                }));
+        auto watch = [impl](AudioObjectID object, AudioObjectPropertySelector selector,
+                            std::function<void()> onChange) {
+            impl->watchers.push_back(
+                std::make_unique<PropertyWatcher>(object, util::address(selector), std::move(onChange)));
+            return impl->watchers.back()->isListening();
         };
-        watchAlive(s.mic);
-        watchAlive(s.bridge);
-        watchAlive(s.aggregate);
-        s.watchers.push_back(std::make_unique<PropertyWatcher>(
-            s.aggregate, util::address(kAudioDevicePropertyDeviceHasChanged), [impl] { impl->fireLost(); }));
-        s.watchers.push_back(std::make_unique<PropertyWatcher>(
-            kAudioObjectSystemObject, util::address(kAudioHardwarePropertyDevices), [impl] {
-                const auto current = findDeviceByUid(impl->micUid);
-                if (!current || *current != impl->mic || !findDeviceByUid(devices::kBridgeUid))
+        auto watchAlive = [&](AudioObjectID object) {
+            return watch(object, kAudioDevicePropertyDeviceIsAlive, [impl, object] {
+                if (util::getScalar<UInt32>(object, kAudioDevicePropertyDeviceIsAlive).value_or(0) == 0)
                     impl->fireLost();
-            }));
-        s.watchers.push_back(std::make_unique<PropertyWatcher>(
-            s.aggregate, util::address(kAudioDeviceProcessorOverload), [impl] { ++impl->overloads; }));
+            });
+        };
+        const char* failed = nullptr;
+        if (!watchAlive(s.mic))
+            failed = "microphone IsAlive";
+        else if (!watchAlive(s.bridge))
+            failed = "Bridge IsAlive";
+        else if (!watchAlive(s.aggregate))
+            failed = "aggregate IsAlive";
+        else if (!watch(s.aggregate, kAudioDevicePropertyDeviceHasChanged, [impl] { impl->fireLost(); }))
+            failed = "aggregate DeviceHasChanged";
+        else if (!watch(kAudioObjectSystemObject, kAudioHardwarePropertyDevices, [impl] {
+                     const auto current = findDeviceByUid(impl->micUid);
+                     if (!current || *current != impl->mic || !findDeviceByUid(devices::kBridgeUid))
+                         impl->fireLost();
+                 }))
+            failed = "device list";
+        if (failed != nullptr) {
+            error = juce::String("could not register the ") + failed
+                    + " listener (did the device disappear during setup?)";
+            return nullptr;
+        }
+        watch(s.aggregate, kAudioDeviceProcessorOverload, [impl] { ++impl->overloads; });
         return io;
     }
 }
@@ -542,6 +562,10 @@ bool AggregateIO::start()
     Impl& s = *impl_;
     if (s.running)
         return true;
+    if (s.lostPending || s.lostFired) {
+        s.lastError = "the device was lost or reconfigured after create(): build a new AggregateIO";
+        return false;
+    }
     s.expectedSampleTime = -1.0;
     const OSStatus status = AudioDeviceStart(s.aggregate, s.procId);
     if (status != noErr) {

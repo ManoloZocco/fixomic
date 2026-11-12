@@ -54,7 +54,10 @@ public:
 
     // Mic or fixomic Bridge disappeared, or the aggregate was invalidated or reconfigured
     // (IsAlive / DeviceHasChanged / device list). Called once, on the main queue; the owner is
-    // expected to destroy this object and build a new one (it may do so inside the handler).
+    // expected to destroy this object and build a new one (it may do so inside the handler). An
+    // event that arrives while no handler is set is not swallowed: start() then fails (the
+    // aggregate is stale) and the next event reaches a handler assigned later. create() fails if
+    // these listeners cannot be registered.
     std::function<void()> onDeviceLost;
 
     // ---- diagnostics (main thread) ----
