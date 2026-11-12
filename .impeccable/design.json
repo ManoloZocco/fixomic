@@ -1,0 +1,178 @@
+{
+ "schemaVersion": 2,
+ "generatedAt": "2026-11-12T21:25:25+00:00",
+ "title": "Design System: fixomic",
+ "extensions": {
+  "colorMeta": {
+   "ground-light": {
+    "role": "neutral",
+    "displayName": "Cool Paper"
+   },
+   "ground-dark": {
+    "role": "neutral",
+    "displayName": "Night Platform"
+   },
+   "accent-light": {
+    "role": "primary",
+    "displayName": "Switch Blue"
+   },
+   "line-active-light": {
+    "role": "state",
+    "displayName": "Line Green"
+   },
+   "line-waiting-light": {
+    "role": "state",
+    "displayName": "Line Slate"
+   },
+   "line-bypass-light": {
+    "role": "state",
+    "displayName": "Line Amber"
+   },
+   "line-problem-light": {
+    "role": "state",
+    "displayName": "Line Red"
+   }
+  },
+  "neutralRamps": {
+   "light": [
+    "#ffffff",
+    "#f6f7f9",
+    "#eceef1",
+    "#e1e4e8",
+    "#c9ced5",
+    "#9ba2ad",
+    "#6a727e",
+    "#545b66",
+    "#353a42",
+    "#1b1e23"
+   ],
+   "dark": [
+    "#121418",
+    "#1b1e23",
+    "#24282e",
+    "#2e3239",
+    "#3b4048",
+    "#5a606a",
+    "#7f8692",
+    "#a4aab4",
+    "#cdd1d7",
+    "#eef0f3"
+   ]
+  },
+  "typographyMeta": {
+   "title": {
+    "displayName": "Title",
+    "purpose": "The state sentence."
+   },
+   "body": {
+    "displayName": "Body",
+    "purpose": "Row labels, flat buttons."
+   },
+   "body-strong": {
+    "displayName": "Body Strong",
+    "purpose": "Values and the Catena heading."
+   },
+   "caption": {
+    "displayName": "Caption",
+    "purpose": "Secondary lines, notices, push buttons."
+   },
+   "micro": {
+    "displayName": "Micro",
+    "purpose": "Station names and meter numerals."
+   }
+  },
+  "shadows": [
+   {
+    "name": "window",
+    "value": "native NSWindow shadow of the non-opaque panel",
+    "purpose": "The panel's only elevation."
+   },
+   {
+    "name": "switch-knob",
+    "value": "0 0.5pt 1pt rgba(0,0,0,0.18)",
+    "purpose": "Switch knob."
+   }
+  ],
+  "motion": [],
+  "platform": "macos (JUCE LookAndFeel_V4, src/ui/Theme.cpp)"
+ },
+ "components": [
+  {
+   "name": "Route strip",
+   "kind": "custom",
+   "description": "The voice's route in the state ink: filled = in service, hollow = skipped, barred = closed.",
+   "html": "<div class=\"ds-route\"><span class=\"ds-st on\"></span><span class=\"ds-st on\"></span><span class=\"ds-st off\"></span><span class=\"ds-st on\"></span></div>",
+   "css": ".ds-route{position:relative;display:flex;justify-content:space-between;width:264px;padding:0;margin:8px 30px}.ds-route:before{content:'';position:absolute;left:0;right:0;top:4px;height:3px;border-radius:2px;background:#1e9a52}.ds-st{position:relative;width:11px;height:11px;border-radius:50%;box-sizing:border-box}.ds-st.on{background:#1e9a52;box-shadow:0 0 0 2px #f6f7f9}.ds-st.off{background:#f6f7f9;border:2px solid #1e9a52}"
+  },
+  {
+   "name": "Level meter",
+   "kind": "custom",
+   "description": "6pt bar on -60..0 dBFS ruled at -40/-20/-10 dB, filled in the state ink while Running.",
+   "html": "<div class=\"ds-meter\"><i style=\"width:46%\"></i></div>",
+   "css": ".ds-meter{position:relative;width:256px;height:6px;border-radius:3px;background:#e1e4e8;overflow:hidden}.ds-meter i{position:absolute;left:0;top:0;bottom:0;border-radius:3px;background:#1e9a52}"
+  },
+  {
+   "name": "Switch",
+   "kind": "custom",
+   "refersTo": "switch-on",
+   "description": "macOS-style switch, accent when on.",
+   "html": "<button class=\"ds-switch\" aria-pressed=\"true\"></button>",
+   "css": ".ds-switch{width:34px;height:20px;border-radius:10px;border:none;background:#2d6bdf;position:relative}.ds-switch:after{content:'';position:absolute;top:2px;right:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 .5px 1px rgba(0,0,0,.18)}.ds-switch[aria-pressed=false]{background:#c9ced5}.ds-switch[aria-pressed=false]:after{left:2px;right:auto}.ds-switch:focus-visible{outline:3px solid rgba(45,107,223,.45);outline-offset:2px}"
+  },
+  {
+   "name": "Push button",
+   "kind": "button",
+   "refersTo": "button-push",
+   "description": "Notice action (Apri Impostazioni).",
+   "html": "<button class=\"ds-push\">Apri Impostazioni</button>",
+   "css": ".ds-push{font:11.5px system-ui;color:#1b1e23;background:#fff;border:1px solid #c9ced5;border-radius:6px;height:24px;padding:0 10px}.ds-push:hover{background:#f2f2f3}.ds-push:active{background:#e6e7e9}.ds-push:focus-visible{outline:2px solid rgba(45,107,223,.6)}"
+  },
+  {
+   "name": "Flat button",
+   "kind": "button",
+   "refersTo": "button-flat",
+   "description": "Footer: Impostazioni… / Esci.",
+   "html": "<button class=\"ds-flat\">Impostazioni…</button>",
+   "css": ".ds-flat{font:13px system-ui;color:#1b1e23;background:none;border:none;border-radius:6px;height:28px;padding:0 8px}.ds-flat:hover{background:#eceef1}.ds-flat:active{background:#e1e4e8}"
+  },
+  {
+   "name": "Notice",
+   "kind": "custom",
+   "refersTo": "notice",
+   "description": "Amber-tinted warning row with an optional settings action.",
+   "html": "<div class=\"ds-notice\">Permesso audio di sistema negato: la cancellazione dell'eco è disattivata.</div>",
+   "css": ".ds-notice{font:11.5px system-ui;color:#1b1e23;background:rgba(184,121,0,.13);border-radius:8px;padding:8px 12px;width:304px}"
+  }
+ ],
+ "narrative": {
+  "northStar": "The Voice's Route",
+  "overview": "A native macOS menu-bar panel that answers one question: is my voice going out clean, and if not, why. The route Microfono, Eco, Catena, fixomic Mic is drawn as a transit line in the state's ink; everything else is a standard control.",
+  "keyCharacteristics": [
+   "State sentence first",
+   "Route strip as the one signature move",
+   "Native controls, system font, light and dark",
+   "Colour only for state"
+  ],
+  "rules": [
+   {
+    "name": "The Reserved Ink Rule",
+    "body": "A state ink appears only where it encodes state.",
+    "section": "colors"
+   },
+   {
+    "name": "The One Ramp Rule",
+    "body": "Every grey is a step of the appearance's neutral ramp.",
+    "section": "colors"
+   }
+  ],
+  "dos": [
+   "Do keep controls native",
+   "Do show — for values not measured yet"
+  ],
+  "donts": [
+   "Don't add cards or side stripes",
+   "Don't add mixer devices",
+   "Don't use a state ink for decoration"
+  ]
+ }
+}
