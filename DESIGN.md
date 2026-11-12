@@ -205,14 +205,17 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
   (the plugin's latency in ms when above 0, "In bypass", "Plugin non trovato"), a switch (on = the
   plugin processes; none for a missing plugin) and a × remove button (secondary ink, flat hover, no
   confirmation). Dragging dims the row to 35 % and marks the drop gap with a 2 pt line in ink that
-  starts at a 7 pt ring under the handles; no line where the row would not move. Under the rows
+  starts at a 7 pt ring under the handles; no line where the row would not move, nor away from the
+  list (more than a row above or below, or past the panel's sides), where a release cancels; Esc
+  cancels too. Under the rows
   the "+ Aggiungi plugin" flat button; with no plugins a caption line invites to add one first.
 - **Plugin picker** (`PluginPicker`): replaces the Catena section in place (never a window). A
   header with a ‹ back button and "Aggiungi plugin" (Body Strong), "Cerca nuovi plugin" (flat) at
   the right; a search field with the push button's fill, edge and 6 pt radius, a tertiary
   magnifier and an accent focus ring; 6.5 rows of 28 pt (a cut row says it scrolls), the hovered /
   selected one on the hover step, the manufacturer · format in secondary caption at the right; one
-  caption status line under it ("Scansione in corso…", or an add error in Line Red). The list's
+  caption status line under it ("Scansione in corso…", or "Impossibile caricare «nome»." in Line
+  Red; why it failed goes to the log, never to the panel). The list's
   place says "Nessun plugin trovato", or invites a scan when the catalog is empty. Esc or ‹ go back.
 - **Menu-bar icon** (`TrayIcon::iconImage`): template image, 20 pt at 2x, 1.5 pt strokes: filled
   microphone (active), outline (waiting), outline crossed by a bar with cut-outs (bypass), outline
