@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ui/PanelParts.h"
 #include "ui/StatusModel.h"
 #include "ui/Theme.h"
 
@@ -15,57 +16,6 @@ class AppController;
 }
 
 namespace fixomic::ui {
-
-// A peak level bar on the -60..0 dBFS scale, ruled at -40 / -20 / -10 dB, drawn in the ink of the
-// state line (the voice's colour). Empty while not live.
-class LevelMeter : public juce::Component {
-public:
-    void setLevel(float peakDb);
-    void setInk(StatusKind kind, bool live);
-    void paint(juce::Graphics&) override;
-
-    static constexpr float kTicksDb[] = {-40.0f, -20.0f, -10.0f};
-
-private:
-    float fraction_ = 0.0f;
-    bool clipping_ = false;
-    StatusKind kind_ = StatusKind::Waiting;
-    bool live_ = false;
-};
-
-// The meter scale's numerals, aligned with LevelMeter's rules.
-class MeterScale : public juce::Component {
-public:
-    void paint(juce::Graphics&) override;
-};
-
-// The signature: the voice's route Microfono -> Eco -> Catena -> fixomic Mic as a transit line in
-// the state's ink; filled stations process, hollow ones are skipped, a barred one is closed.
-class RouteStripView : public juce::Component {
-public:
-    RouteStripView();
-    void setRoute(const RouteStrip&);
-    void paint(juce::Graphics&) override;
-
-    static constexpr int kHeight = 34;
-
-private:
-    RouteStrip route_;
-};
-
-// A warning, tinted, with an optional button to the System Settings pane that fixes it.
-class NoticeRow : public juce::Component {
-public:
-    explicit NoticeRow(const Notice&, std::function<void(mac::PrivacyPane)> openPane);
-    int heightForWidth(int width) const;
-    void paint(juce::Graphics&) override;
-    void resized() override;
-
-private:
-    Notice notice_;
-    TextBlock text_{TextStyle::Caption, TextBlock::Ink::Primary};
-    juce::TextButton openButton_;
-};
 
 // The menu-bar panel, ~360 pt wide, rows in the spec's order: state sentence + global bypass
 // switch and the route strip; notices (backend warning, plugins not restored); input / output
@@ -146,9 +96,16 @@ private:
     juce::TextButton quitButton_;
 };
 
+// Where the panel window goes: centred under `anchor` (the menu-bar icon; under `mouse` when
+// unknown), kept 8 pt inside `userArea` horizontally, 6 pt below the menu bar, at `preferredHeight`
+// unless that would run past the bottom of `userArea` (8 pt margin): then clamped, and the panel
+// scrolls inside the window.
+juce::Rectangle<int> panelWindowBounds(std::optional<juce::Rectangle<int>> anchor, juce::Point<int> mouse,
+                                       juce::Rectangle<int> userArea, int width, int preferredHeight);
+
 // The borderless, rounded, shadowed window the panel lives in, under the menu-bar icon, like the
 // system's menu-bar extras: it hides itself on Esc and when it stops being the active window (a
-// click elsewhere).
+// click elsewhere). Never taller than the display (panelWindowBounds): a longer panel scrolls.
 class MainPanelWindow : public juce::TopLevelWindow {
 public:
     explicit MainPanelWindow(AppController&);
@@ -172,8 +129,10 @@ public:
 private:
     void activeWindowStatusChanged() override;
     void place();
+    void fitPanel();   // the panel at its preferred height
 
     MainPanel panel_;
+    juce::Viewport viewport_;
     std::optional<juce::Rectangle<int>> anchor_;
     double dismissedAt_ = -1.0e9;
 };

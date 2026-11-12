@@ -23,7 +23,7 @@ option(FIXOMIC_ASAN "Build with AddressSanitizer" OFF)
 
 include(cmake/Dependencies.cmake)
 
-# ---- core library (everything except src/app) -----------------------------
+# ---- core library (everything except src/app and the UI on top of it) --------------------------
 add_library(fixomic_core STATIC
     src/core/Config.cpp
     src/core/ConfigStore.cpp
@@ -44,14 +44,8 @@ add_library(fixomic_core STATIC
     src/platform/mac/StatusItem.mm
     src/plugins/PluginCatalog.cpp
     src/plugins/PluginWindows.cpp
-    src/ui/MainPanel.cpp
-    src/ui/Snapshot.cpp
-    src/ui/StatusModel.cpp
-    src/ui/Theme.cpp
-    src/ui/TrayIcon.cpp
+    src/ui/StatusModel.cpp   # the UI's pure logic: no AppController, no GUI
 )
-# src/ui is the menu-bar UI on top of AppController (src/app, compiled into the app target): only
-# the app links the panel and the tray icon; the tests use the pure StatusModel.
 # The Core Audio layer (and its Objective-C++ tests) uses ARC (JUCE's own .mm sources are built without it).
 set_source_files_properties(
     src/platform/mac/CoreAudioDevices.mm
@@ -78,7 +72,8 @@ endif()
 # target that links them (even through COMPILE_ONLY). To compile them exactly once, only
 # fixomic_core links them (PRIVATE: the sources and link-only requirements stay here). The
 # compile-time usage requirements (definitions, include dirs, C++ standard) are re-exported
-# explicitly to fixomic and fixomic_tests, which link just fixomic_core.
+# explicitly to everything that links fixomic_core (fixomic_app_lib, and through it fixomic and
+# fixomic_tests; fxprobe; the test scan worker).
 set(FIXOMIC_JUCE_MODULES
     juce::juce_core
     juce::juce_events
@@ -126,6 +121,25 @@ target_compile_definitions(fixomic_core PUBLIC
     JUCE_PLUGINHOST_VST3=1
 )
 
+# ---- app library: AppController and the menu-bar UI on top of it --------------------------------
+# Everything of the app except its entry point (src/app/Main.cpp), so the tests can link the UI
+# components too. Depends on fixomic_core, never the other way round.
+add_library(fixomic_app_lib STATIC
+    src/app/AppController.cpp
+    src/ui/MainPanel.cpp
+    src/ui/PanelParts.cpp
+    src/ui/Snapshot.cpp
+    src/ui/Theme.cpp
+    src/ui/TrayIcon.cpp
+)
+target_link_libraries(fixomic_app_lib
+    PUBLIC
+        fixomic_core
+    PRIVATE
+        juce::juce_recommended_config_flags
+        juce::juce_recommended_warning_flags
+)
+
 # ---- app bundle ------------------------------------------------------------
 # LSUIElement=true: menu-bar only, no Dock icon.
 # JUCE parses PLIST_TO_MERGE as a full <plist><dict> document and merges it into Info.plist.
@@ -148,7 +162,7 @@ juce_add_gui_app(fixomic
     PLIST_TO_MERGE "${FIXOMIC_PLIST_ENTRIES}"
 )
 
-target_sources(fixomic PRIVATE src/app/Main.cpp src/app/AppController.cpp)
+target_sources(fixomic PRIVATE src/app/Main.cpp)
 target_compile_definitions(fixomic PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:fixomic,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
@@ -200,7 +214,7 @@ add_custom_command(TARGET fixomic POST_BUILD
 
 target_link_libraries(fixomic
     PRIVATE
-        fixomic_core
+        fixomic_app_lib
     PRIVATE
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
@@ -225,7 +239,7 @@ add_executable(fixomic_tests
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)
-target_link_libraries(fixomic_tests PRIVATE fixomic_core Catch2::Catch2WithMain)
+target_link_libraries(fixomic_tests PRIVATE fixomic_app_lib Catch2::Catch2WithMain)
 set_target_properties(fixomic_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
 
 # Plugin scan worker for PluginCatalogTests: the production PluginScanWorker plus a test override

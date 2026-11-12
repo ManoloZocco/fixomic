@@ -14,9 +14,9 @@
 // Command line: only the plugin scan worker, `--scan-worker:<pipe>`, launched by PluginCatalog.
 //
 // Developer commands exist only when FIXOMIC_DEV_COMMANDS is 1 (CMake: every configuration except
-// Release). They are also forwarded to the running instance when the binary is launched again
-// (JUCE passes a second launch's command line to anotherInstanceStarted()); results go to the
-// running instance's stderr:
+// Release). At launch they run once the event loop runs. They are also forwarded to the running
+// instance when the binary is launched again (JUCE passes a second launch's command line to
+// anotherInstanceStarted()); results go to the running instance's stderr:
 //
 //   --set-input <uid>           selects the microphone (the Settings panel replaces it), e.g.
 //                               --set-input BuiltInHeadphoneInputDevice
@@ -32,6 +32,8 @@
 //   --uninstall-driver          removes the installed driver (administrator dialog), result logged
 //   --launch-at-login <0|1>     registers / unregisters the login item
 //   --show-panel                opens the menu-bar panel, as a click on the icon does
+//   --tray-menu                 opens the icon's right-click menu and logs whether it is still
+//                               open 1 s later
 //   --snapshot <dir>            renders the panel (and the four icons) with the current state into
 //                               <dir>/panel-light.png, panel-dark.png, tray-light.png, tray-dark.png
 //                               at 2x; a relative <dir> is resolved against the running instance's
@@ -65,8 +67,10 @@ void printStatus(AppController& app, ui::TrayIcon& tray) {
         + juce::String(app.latency().totalMs(), 2) + " ms, scanning " + (app.isScanning() ? "yes" : "no")
         + ", " + juce::String(app.effects().size()) + " effects, " + juce::String(app.catalog().blacklisted().size())
         + " blacklisted");
+    const auto* panelWindow = tray.panel().getTopLevelComponent();
     log("  icon at " + boundsText(fixomic::mac::statusItemScreenBounds(tray.getNativeHandle())) + ", panel "
-        + (tray.isPanelShowing() ? "shown at " + tray.panel().getScreenBounds().toString() : juce::String("hidden")));
+        + (tray.isPanelShowing() ? "shown at " + panelWindow->getScreenBounds().toString() : juce::String("hidden"))
+        + ", menu " + (tray.isMenuShowing() ? "open" : "closed"));
     const auto slots = app.slots();
     for (size_t i = 0; i < slots.size(); ++i)
         log("  slot " + juce::String(static_cast<int>(i)) + ": " + slots[i].name + (slots[i].missing ? " [missing]" : "")
@@ -185,6 +189,17 @@ bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& com
                     + (app.launchAtLogin() ? "enabled" : "not enabled"));
             else
                 log("launch at login: " + error);
+        } else if (arg == "--tray-menu") {
+            // The right-click menu, then whether it is still open a second later (an inactive
+            // LSUIElement app loses a JUCE menu on its first timer tick).
+            tray.showMenu();
+            log("tray menu requested");
+            juce::Timer::callAfterDelay(1000, [safe = juce::Component::SafePointer<ui::TrayIcon>(&tray)] {
+                if (safe == nullptr) return;
+                log(juce::String("tray menu 1 s later: ") + (safe->isMenuShowing() ? "open" : "closed")
+                    + ", app active " + (juce::Process::isForegroundProcess() ? "yes" : "no") + ", modal components "
+                    + juce::String(juce::ModalComponentManager::getInstance()->getNumModalComponents()));
+            });
         } else if (arg == "--show-panel") {
             tray.showPanel();
             log("panel shown");
@@ -222,6 +237,9 @@ public:
         app_ = std::make_unique<AppController>();
         tray_ = std::make_unique<ui::TrayIcon>(*app_);
         tray_->onQuit = [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); };
+#if FIXOMIC_DEV_COMMANDS
+        tray_->onMenuChanged = [](bool open) { log(open ? "tray menu open" : "tray menu closed"); };
+#endif
         // tray_->onOpenSettings: the Settings panel (Task 10c).
 
         // The one model handler: the log, then the menu-bar icon and its panel.
@@ -231,7 +249,11 @@ public:
         };
         for (const auto& warning : app_->startupWarnings()) log("startup warning: " + warning);
 #if FIXOMIC_DEV_COMMANDS
-        runCommands(*app_, *tray_, commandLine);
+        // Once the event loop runs: initialise() is called before the app finished launching, when
+        // macOS ignores activation (--show-panel and --tray-menu activate the app).
+        juce::MessageManager::callAsync([this, commandLine] {
+            if (app_ != nullptr && tray_ != nullptr) runCommands(*app_, *tray_, commandLine);
+        });
 #endif
     }
 

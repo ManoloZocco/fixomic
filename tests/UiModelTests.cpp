@@ -1,6 +1,7 @@
 #include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
 
+#include "ui/MainPanel.h"
 #include "ui/StatusModel.h"
 
 #include <cmath>
@@ -192,9 +193,16 @@ TEST_CASE("routeFor marks the stations the voice passes through", "[ui]") {
                                     StationState::Skipped, StationState::InService});
     }
     SECTION("idle, starting or waiting for a permission: nothing in service") {
-        const auto route = routeFor(presentStatus(engine(EngineState::Idle)), all);
-        REQUIRE(route == RouteStrip{StatusKind::Waiting, StationState::Skipped, StationState::Skipped,
-                                    StationState::Skipped, StationState::Skipped});
+        const RouteStrip nothing{StatusKind::Waiting, StationState::Skipped, StationState::Skipped,
+                                 StationState::Skipped, StationState::Skipped};
+        REQUIRE(routeFor(presentStatus(engine(EngineState::Idle)), all) == nothing);
+        REQUIRE(routeFor(presentStatus(engine(EngineState::Starting)), all) == nothing);
+
+        auto waiting = engine(EngineState::Error);
+        waiting.pendingPermission = PendingPermission::Microphone;
+        REQUIRE(routeFor(presentStatus(waiting), all) == nothing);
+        waiting.pendingPermission = PendingPermission::SystemAudio;
+        REQUIRE(routeFor(presentStatus(waiting), all) == nothing);   // no closed station: not a problem
     }
     SECTION("the problem station is closed") {
         REQUIRE(routeFor(presentStatus(engine(EngineState::MicMissing)), all).microphone == StationState::Closed);
@@ -222,6 +230,34 @@ TEST_CASE("collectNotices lists the warning with its pane, then the startup warn
     REQUIRE(notices[2] == Notice{"Gate missing", std::nullopt});
 
     REQUIRE(collectNotices({}, PrivacyPane::SystemAudio, {}).empty());   // no text, no row
+}
+
+TEST_CASE("collectNotices merges more than two startup warnings into one capped row", "[ui]") {
+    REQUIRE(kMaxStartupNotices == 2);
+    const std::vector<juce::String> three{"Nectar 4: could not be loaded", "Gate: could not be loaded",
+                                          "EQ: invalid plugin description"};
+    const auto notices = collectNotices("tap silent", PrivacyPane::SystemAudio, three);
+    REQUIRE(notices.size() == 2);
+    REQUIRE(notices[0] == Notice{"tap silent", PrivacyPane::SystemAudio});
+    REQUIRE(notices[1].text
+            == utf8("3 avvisi all\u2019avvio: Nectar 4: could not be loaded; Gate: could not be loaded; "
+                    "EQ: invalid plugin description"));
+    REQUIRE_FALSE(notices[1].settingsPane.has_value());
+    REQUIRE(notices[1].maxLines == kMergedNoticeMaxLines);
+    REQUIRE(kMergedNoticeMaxLines == 3);
+
+    // However many, still one row; empty entries do not count.
+    std::vector<juce::String> many(40, "Plugin: could not be loaded");
+    many.push_back({});
+    const auto merged = collectNotices({}, std::nullopt, many);
+    REQUIRE(merged.size() == 1);
+    REQUIRE(merged[0].text.startsWith(utf8("40 avvisi all\u2019avvio: ")));
+
+    // Up to two stay separate rows, uncapped.
+    const auto two = collectNotices({}, std::nullopt, {"A: x", "", "B: y"});
+    REQUIRE(two.size() == 2);
+    REQUIRE(two[1] == Notice{"B: y", std::nullopt});
+    REQUIRE(two[1].maxLines == 0);
 }
 
 // ---- formatting -------------------------------------------------------------------------------
@@ -262,4 +298,35 @@ TEST_CASE("chainSummary lists the plugins in order until the chain editor exists
     REQUIRE(chainSummary({{"Nectar 4 Gate", false, false}}) == "Nectar 4 Gate");
     REQUIRE(chainSummary({{"Gate", false, false}, {"Nectar 4", true, false}, {"Old EQ", false, true}})
             == utf8("Gate \u2192 Nectar 4 (in bypass) \u2192 Old EQ (non trovato)"));
+}
+
+// ---- panel window geometry --------------------------------------------------------------------
+
+TEST_CASE("the panel window sits under the icon and never runs off the display", "[ui]") {
+    const juce::Rectangle<int> userArea{0, 30, 1710, 1070};   // under a 30 pt menu bar
+    const juce::Rectangle<int> icon{1366, 0, 38, 30};
+    const juce::Point<int> mouse{700, 400};
+
+    SECTION("centred under the icon, 6 pt below the menu bar, at its preferred height") {
+        const auto bounds = panelWindowBounds(icon, mouse, userArea, 360, 418);
+        REQUIRE(bounds == juce::Rectangle<int>(1205, 36, 360, 418));
+    }
+    SECTION("kept inside the display horizontally") {
+        REQUIRE(panelWindowBounds(juce::Rectangle<int>{1690, 0, 20, 30}, mouse, userArea, 360, 418).getRight()
+                == 1710 - 8);
+        REQUIRE(panelWindowBounds(juce::Rectangle<int>{0, 0, 20, 30}, mouse, userArea, 360, 418).getX() == 8);
+    }
+    SECTION("taller than the display: clamped to the user area, 8 pt above its bottom") {
+        const auto bounds = panelWindowBounds(icon, mouse, userArea, 360, 3000);
+        REQUIRE(bounds.getY() == 36);
+        REQUIRE(bounds.getBottom() == 1100 - 8);
+        REQUIRE(bounds.getHeight() == 1056);
+    }
+    SECTION("on a display too short even for the minimum, 160 pt still show") {
+        REQUIRE(panelWindowBounds(icon, mouse, {0, 30, 1710, 100}, 360, 418).getHeight() == 160);
+    }
+    SECTION("no icon position: under the mouse, at the top of the user area") {
+        const auto bounds = panelWindowBounds(std::nullopt, mouse, userArea, 360, 418);
+        REQUIRE(bounds == juce::Rectangle<int>(520, 36, 360, 418));
+    }
 }

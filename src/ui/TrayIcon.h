@@ -18,9 +18,9 @@ namespace fixomic::ui {
 // problem), the panel it opens, and the StatusModel both of them present.
 //
 // Left click toggles the panel; right click (or control-click) shows a menu with the state and
-// "Esci". The icon and the panel follow the model through modelChanged() (call it from
-// AppController::onModelChanged); the only timer is a one-shot deadline for the DriverMissing hold.
-// Message thread only.
+// "Esci" (see showMenu()). The icon and the panel follow the model through modelChanged() (call it
+// from AppController::onModelChanged). Two one-shot timers, no polling: the deadline of the
+// DriverMissing hold and the short delay before the menu opens. Message thread only.
 class TrayIcon : public juce::SystemTrayIconComponent, private juce::Timer {
 public:
     explicit TrayIcon(AppController&);
@@ -35,8 +35,16 @@ public:
     bool isPanelShowing() const;
     MainPanel& panel();
 
-    std::function<void()> onQuit;           // "Esci", from the menu or the panel
-    std::function<void()> onOpenSettings;   // the panel's settings entry (10c)
+    // The right-click menu: the state and "Esci". The app is made active first and the menu opens
+    // kMenuDelayMs later: a JUCE PopupMenu dismisses itself on its first timer tick when the app is
+    // not the active one (an LSUIElement app is not, when its status item is clicked).
+    void showMenu();
+    bool isMenuShowing() const;   // opened and not dismissed yet
+    static constexpr int kMenuDelayMs = 50;
+
+    std::function<void()> onQuit;              // "Esci", from the menu or the panel
+    std::function<void()> onOpenSettings;      // the panel's settings entry (10c)
+    std::function<void(bool open)> onMenuChanged;   // the menu opened / closed (diagnostics)
 
     // The template image of a state: 20 x 20 pt drawn at 2x, black on transparent (macOS tints it).
     static juce::Image iconImage(StatusKind);
@@ -46,11 +54,14 @@ public:
 private:
     void timerCallback() override;
     void refreshStatus();
-    void showMenu();
+    void openMenu();
+    void menuClosed();
 
     AppController& app_;
     StatusModel model_;
     std::optional<StatusKind> iconShown_;
+    bool menuShowing_ = false;
+    juce::TimedCallback menuTimer_{[this] { openMenu(); }};   // one-shot: kMenuDelayMs after showMenu()
     MainPanelWindow window_;
 };
 

@@ -98,6 +98,9 @@ public:
     void setText(const juce::String&);
     const juce::String& text() const;
     void setInk(Ink);
+    // At most this many lines, the last one ending in "…" when the text is longer; 0 = all. The
+    // accessible title keeps the whole text.
+    void setMaxLines(int);
     int heightForWidth(int width) const;
 
     void paint(juce::Graphics&) override;
@@ -105,11 +108,13 @@ public:
 
 private:
     juce::TextLayout layout(float width, juce::Colour) const;
+    juce::TextLayout layoutOf(const juce::String&, float width, juce::Colour) const;
 
     TextStyle style_;
     Ink ink_;
     juce::Justification justification_;
     juce::String text_;
+    int maxLines_ = 0;
 };
 
 } // namespace fixomic::ui

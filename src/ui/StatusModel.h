@@ -92,10 +92,18 @@ RouteStrip routeFor(const StatusPresentation&, const RouteInputs&);
 struct Notice {
     juce::String text;
     std::optional<mac::PrivacyPane> settingsPane;   // the System Settings pane that fixes it
+    int maxLines = 0;                                // shown elided to this many lines; 0 = all
     bool operator==(const Notice&) const = default;
 };
 
-// The backend warning first (with its pane), then the plugins that could not be restored.
+// Startup warnings shown one per row; more are merged into one row of kMergedNoticeMaxLines lines,
+// so a chain of many unrestorable plugins cannot grow the panel without bound.
+inline constexpr int kMaxStartupNotices = 2;
+inline constexpr int kMergedNoticeMaxLines = 3;
+
+// The backend warning first (with its pane), then the startup warnings (plugins that could not be
+// restored, a login item that could not be registered): up to kMaxStartupNotices rows, otherwise
+// one merged row "N avvisi all'avvio: a; b; c".
 std::vector<Notice> collectNotices(const juce::String& lastWarning, std::optional<mac::PrivacyPane> warningPane,
                                    const std::vector<juce::String>& startupWarnings);
 

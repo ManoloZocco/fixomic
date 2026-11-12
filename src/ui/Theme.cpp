@@ -245,14 +245,39 @@ void TextBlock::setInk(Ink ink) {
     repaint();
 }
 
-juce::TextLayout TextBlock::layout(float width, juce::Colour colour) const {
+void TextBlock::setMaxLines(int lines) {
+    if (lines == maxLines_) return;
+    maxLines_ = lines;
+    repaint();
+}
+
+juce::TextLayout TextBlock::layoutOf(const juce::String& text, float width, juce::Colour colour) const {
     juce::AttributedString string;
     string.setWordWrap(juce::AttributedString::byWord);
     string.setJustification(justification_);
-    string.append(text_, Theme::font(style_), colour);
+    string.append(text, Theme::font(style_), colour);
     juce::TextLayout result;
     result.createLayout(string, std::max(1.0f, width));
     return result;
+}
+
+juce::TextLayout TextBlock::layout(float width, juce::Colour colour) const {
+    auto full = layoutOf(text_, width, colour);
+    if (maxLines_ <= 0 || full.getNumLines() <= maxLines_) return full;
+    // The longest prefix that still fits with the ellipsis (binary search: a handful of layouts,
+    // only for capped text that overflows).
+    const auto elided = [this](int length) {
+        return text_.substring(0, length).trimEnd() + juce::String::fromUTF8("\u2026");
+    };
+    int fits = 0, tooLong = text_.length();
+    while (tooLong - fits > 1) {
+        const int middle = (fits + tooLong) / 2;
+        if (layoutOf(elided(middle), width, colour).getNumLines() <= maxLines_)
+            fits = middle;
+        else
+            tooLong = middle;
+    }
+    return layoutOf(elided(fits), width, colour);
 }
 
 int TextBlock::heightForWidth(int width) const {

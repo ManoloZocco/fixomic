@@ -128,8 +128,16 @@ std::vector<Notice> collectNotices(const juce::String& lastWarning, std::optiona
                                    const std::vector<juce::String>& startupWarnings) {
     std::vector<Notice> notices;
     if (lastWarning.isNotEmpty()) notices.push_back({lastWarning, warningPane});
+
+    juce::StringArray startup;
     for (const auto& warning : startupWarnings)
-        if (warning.isNotEmpty()) notices.push_back({warning, std::nullopt});
+        if (warning.isNotEmpty()) startup.add(warning);
+    if (startup.size() <= kMaxStartupNotices) {
+        for (const auto& warning : startup) notices.push_back({warning, std::nullopt});
+    } else {
+        const auto text = juce::String(startup.size()) + utf8(" avvisi all\u2019avvio: ") + startup.joinIntoString("; ");
+        notices.push_back({text, std::nullopt, kMergedNoticeMaxLines});
+    }
     return notices;
 }
 

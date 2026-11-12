@@ -113,7 +113,10 @@ TrayIcon::TrayIcon(AppController& app) : app_(app), window_(app) {
     refreshStatus();
 }
 
-TrayIcon::~TrayIcon() { stopTimer(); }
+TrayIcon::~TrayIcon() {
+    stopTimer();
+    menuTimer_.stopTimer();
+}
 
 void TrayIcon::modelChanged() { refreshStatus(); }
 
@@ -168,16 +171,34 @@ void TrayIcon::mouseDown(const juce::MouseEvent& e) {
 
 void TrayIcon::showMenu() {
     hidePanel();
+    // As JUCE's own tray example does: activate, then give the system a moment before the menu.
+    juce::Process::makeForegroundProcess();
+    menuTimer_.startTimer(kMenuDelayMs);
+}
+
+void TrayIcon::openMenu() {
+    menuTimer_.stopTimer();
     juce::PopupMenu menu;
     menu.addItem(juce::PopupMenu::Item(status().text).setEnabled(false));
     menu.addSeparator();
-    menu.addItem("Esci", [this] {
-        if (onQuit) onQuit();
+    menu.addItem("Esci", [safe = SafePointer<TrayIcon>(this)] {
+        if (safe != nullptr && safe->onQuit) safe->onQuit();
     });
     auto options = juce::PopupMenu::Options{};
     if (const auto bounds = mac::statusItemScreenBounds(getNativeHandle())) options = options.withTargetScreenArea(*bounds);
-    menu.showMenuAsync(options);
+    menuShowing_ = true;
+    if (onMenuChanged) onMenuChanged(true);
+    menu.showMenuAsync(options, [safe = SafePointer<TrayIcon>(this)](int) {
+        if (safe != nullptr) safe->menuClosed();
+    });
 }
+
+void TrayIcon::menuClosed() {
+    menuShowing_ = false;
+    if (onMenuChanged) onMenuChanged(false);
+}
+
+bool TrayIcon::isMenuShowing() const { return menuShowing_; }
 
 // ---- icon sheet (snapshot) --------------------------------------------------------------------
 
