@@ -41,9 +41,17 @@ add_library(fixomic_core STATIC
     src/platform/mac/Permissions.mm
     src/platform/mac/DriverInstaller.mm
     src/platform/mac/LoginItem.mm
+    src/platform/mac/StatusItem.mm
     src/plugins/PluginCatalog.cpp
     src/plugins/PluginWindows.cpp
+    src/ui/MainPanel.cpp
+    src/ui/Snapshot.cpp
+    src/ui/StatusModel.cpp
+    src/ui/Theme.cpp
+    src/ui/TrayIcon.cpp
 )
+# src/ui is the menu-bar UI on top of AppController (src/app, compiled into the app target): only
+# the app links the panel and the tray icon; the tests use the pure StatusModel.
 # The Core Audio layer (and its Objective-C++ tests) uses ARC (JUCE's own .mm sources are built without it).
 set_source_files_properties(
     src/platform/mac/CoreAudioDevices.mm
@@ -55,6 +63,7 @@ set_source_files_properties(
     src/platform/mac/Permissions.mm
     src/platform/mac/DriverInstaller.mm
     src/platform/mac/LoginItem.mm
+    src/platform/mac/StatusItem.mm
     tests/MacEngineTests.mm
     tests/PlatformServicesTests.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
@@ -143,6 +152,8 @@ target_sources(fixomic PRIVATE src/app/Main.cpp src/app/AppController.cpp)
 target_compile_definitions(fixomic PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:fixomic,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
+    # Developer command-line options (src/app/Main.cpp): every configuration except Release.
+    FIXOMIC_DEV_COMMANDS=$<IF:$<CONFIG:Release>,0,1>
 )
 # Code signing. Ad-hoc signatures change with every build, and macOS then asks for the microphone
 # and system-audio permissions again; a stable identity keeps the grants across rebuilds. Default:
@@ -210,6 +221,7 @@ add_executable(fixomic_tests
     tests/PluginCatalogTests.cpp
     tests/PluginWindowsTests.cpp
     tests/PlatformServicesTests.mm
+    tests/UiModelTests.cpp
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)

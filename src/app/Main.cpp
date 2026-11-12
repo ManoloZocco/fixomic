@@ -4,17 +4,22 @@
 #include <cstdio>
 
 #include "app/AppController.h"
+#include "platform/mac/StatusItem.h"
 #include "plugins/PluginCatalog.h"
+#include "ui/MainPanel.h"
+#include "ui/Snapshot.h"
+#include "ui/Theme.h"
+#include "ui/TrayIcon.h"
 
-// Command line (besides the plugin scan worker, `--scan-worker:<pipe>`, launched by PluginCatalog):
+// Command line: only the plugin scan worker, `--scan-worker:<pipe>`, launched by PluginCatalog.
 //
-//   --set-input <uid>           selects the microphone (fixomic never picks one by itself; the UI of
-//                               Task 10 replaces this), e.g. --set-input BuiltInHeadphoneInputDevice
-//
-// Developer commands, also forwarded to the running instance when the binary is launched again
+// Developer commands exist only when FIXOMIC_DEV_COMMANDS is 1 (CMake: every configuration except
+// Release). They are also forwarded to the running instance when the binary is launched again
 // (JUCE passes a second launch's command line to anotherInstanceStarted()); results go to the
 // running instance's stderr:
 //
+//   --set-input <uid>           selects the microphone (the Settings panel replaces it), e.g.
+//                               --set-input BuiltInHeadphoneInputDevice
 //   --status                    engine state, chain, latency, scan state, open IO, meters
 //   --list-effects              the catalog's effects
 //   --add-plugin <name> [fmt]   adds the first effect named <name> (format AudioUnit / VST3)
@@ -26,45 +31,49 @@
 //   --install-driver            installs the bundled driver (administrator dialog), result logged
 //   --uninstall-driver          removes the installed driver (administrator dialog), result logged
 //   --launch-at-login <0|1>     registers / unregisters the login item
+//   --show-panel                opens the menu-bar panel, as a click on the icon does
+//   --snapshot <dir>            renders the panel (and the four icons) with the current state into
+//                               <dir>/panel-light.png, panel-dark.png, tray-light.png, tray-dark.png
+//                               at 2x; a relative <dir> is resolved against the running instance's
+//                               working directory (/ when launched with `open`): pass an absolute one
+
+#ifndef FIXOMIC_DEV_COMMANDS
+#define FIXOMIC_DEV_COMMANDS 0
+#endif
 
 namespace {
 
 using fixomic::AppController;
 using fixomic::EngineState;
-
-juce::String statusText(const AppController& app) {
-    switch (app.engineState()) {
-    case EngineState::Idle: return "In attesa: nessuna app usa fixomic Mic";
-    case EngineState::Starting: return "Avvio in corso...";
-    case EngineState::Running: return "Attivo";
-    case EngineState::MicMissing:
-        return app.config().inputDeviceUid.isEmpty() ? "Nessun microfono selezionato" : "Microfono non disponibile";
-    case EngineState::DriverMissing: return "Driver fixomic non installato";
-    case EngineState::UnsupportedSampleRate: return "Il microfono non supporta 48 kHz";
-    case EngineState::Error: return "Errore: " + app.lastError();
-    }
-    return {};
-}
+namespace ui = fixomic::ui;
 
 void log(const juce::String& text) {
     std::fprintf(stderr, "fixomic: [%.3f] %s\n", static_cast<double>(juce::Time::currentTimeMillis()) / 1000.0,
                  text.toRawUTF8());
 }
 
-void printStatus(AppController& app) {
-    log(juce::String("state ") + fixomic::toString(app.engineState()) + " (" + statusText(app) + ")"
+#if FIXOMIC_DEV_COMMANDS
+
+juce::String boundsText(std::optional<juce::Rectangle<int>> bounds) {
+    return bounds ? bounds->toString() : juce::String("unknown");
+}
+
+void printStatus(AppController& app, ui::TrayIcon& tray) {
+    log(juce::String("state ") + fixomic::toString(app.engineState()) + " (" + tray.status().text + ")"
         + (app.lastWarning().isNotEmpty() ? ", warning: " + app.lastWarning() : juce::String())
         + ", input " + app.config().inputDeviceUid + ", latency "
         + juce::String(app.latency().totalMs(), 2) + " ms, scanning " + (app.isScanning() ? "yes" : "no")
         + ", " + juce::String(app.effects().size()) + " effects, " + juce::String(app.catalog().blacklisted().size())
         + " blacklisted");
+    log("  icon at " + boundsText(fixomic::mac::statusItemScreenBounds(tray.getNativeHandle())) + ", panel "
+        + (tray.isPanelShowing() ? "shown at " + tray.panel().getScreenBounds().toString() : juce::String("hidden")));
     const auto slots = app.slots();
     for (size_t i = 0; i < slots.size(); ++i)
         log("  slot " + juce::String(static_cast<int>(i)) + ": " + slots[i].name + (slots[i].missing ? " [missing]" : "")
             + (slots[i].bypassed ? " [bypassed]" : "") + ", latency " + juce::String(slots[i].latencySamples));
     for (const auto& warning : app.startupWarnings()) log("  startup warning: " + warning);
     log("  " + app.ioDiagnostics() + ", input peak " + juce::String(app.inputPeakDb(), 1) + " dB, output peak "
-        + juce::String(app.outputPeakDb(), 1) + " dB");
+        + juce::String(app.outputPeakDb(), 1) + " dB, ERLE " + ui::formatErle(app.erleDb()));
 }
 
 const char* permissionText(fixomic::mac::Permission permission) {
@@ -86,8 +95,22 @@ void printPlatformStatus(AppController& app) {
         + ")");
 }
 
+// Renders the UI with the current state. 10b / 10c add their components to `targets`.
+void writeSnapshots(AppController& app, const ui::TrayIcon& tray, const juce::String& path) {
+    const auto directory = juce::File::getCurrentWorkingDirectory().getChildFile(path);
+    ui::MainPanel panel(app);
+    panel.refresh(tray.status());
+    panel.setSize(ui::MainPanel::kWidth, panel.preferredHeight(ui::MainPanel::kWidth));
+    const auto icons = ui::createTrayIconSheet();
+
+    const std::vector<ui::SnapshotTarget> targets{{"panel", &panel}, {"tray", icons.get()}};
+    juce::String error;
+    for (const auto& file : ui::writeSnapshots(directory, targets, error)) log("snapshot " + file.getFullPathName());
+    if (error.isNotEmpty()) log("snapshot failed: " + error);
+}
+
 // Applies the options in `commandLine`; returns false if one was not understood.
-bool runCommands(AppController& app, const juce::String& commandLine) {
+bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& commandLine) {
     juce::StringArray args;
     args.addTokens(commandLine, true);
     args.removeEmptyStrings();
@@ -100,7 +123,7 @@ bool runCommands(AppController& app, const juce::String& commandLine) {
             const auto uid = args[++i];
             app.updateConfig([&](fixomic::Config& c) { c.inputDeviceUid = uid; });
         } else if (arg == "--status") {
-            printStatus(app);
+            printStatus(app, tray);
         } else if (arg == "--list-effects") {
             for (const auto& d : app.effects()) log(d.pluginFormatName + "  " + d.name + "  " + d.fileOrIdentifier);
         } else if (arg == "--add-plugin" && i + 1 < args.size()) {
@@ -162,6 +185,11 @@ bool runCommands(AppController& app, const juce::String& commandLine) {
                     + (app.launchAtLogin() ? "enabled" : "not enabled"));
             else
                 log("launch at login: " + error);
+        } else if (arg == "--show-panel") {
+            tray.showPanel();
+            log("panel shown");
+        } else if (arg == "--snapshot" && i + 1 < args.size()) {
+            writeSnapshots(app, tray, args[++i]);
         } else {
             log("unknown option " + arg);
             return false;
@@ -170,36 +198,7 @@ bool runCommands(AppController& app, const juce::String& commandLine) {
     return true;
 }
 
-// Menu-bar icon: a simple filled circle drawn as a template image (macOS tints it
-// for light/dark menu bars).
-juce::Image makeTrayIcon() {
-    constexpr int size = 44; // 22 pt @2x
-    juce::Image image(juce::Image::ARGB, size, size, true);
-    juce::Graphics g(image);
-    g.setColour(juce::Colours::black);
-    g.fillEllipse(juce::Rectangle<float>(size, size).reduced(8.0f));
-    return image;
-}
-
-// Minimal tray until the real UI (Task 10): status line and "Esci".
-class TrayIcon final : public juce::SystemTrayIconComponent {
-public:
-    explicit TrayIcon(AppController& app) : app_(app) {
-        setIconImage(makeTrayIcon(), makeTrayIcon());
-        setIconTooltip("fixomic");
-    }
-
-    void mouseDown(const juce::MouseEvent&) override {
-        juce::PopupMenu menu;
-        menu.addItem(juce::PopupMenu::Item(statusText(app_)).setEnabled(false));
-        menu.addSeparator();
-        menu.addItem("Esci", [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); });
-        menu.showMenuAsync(juce::PopupMenu::Options{});
-    }
-
-private:
-    AppController& app_;
-};
+#endif // FIXOMIC_DEV_COMMANDS
 
 class FixomicApplication final : public juce::JUCEApplication {
 public:
@@ -217,35 +216,53 @@ public:
             if (scanWorker_ == nullptr) quit();
             return;
         }
+        theme_ = std::make_unique<ui::Theme>();   // follows the system appearance
+        juce::LookAndFeel::setDefaultLookAndFeel(theme_.get());
+
         app_ = std::make_unique<AppController>();
+        tray_ = std::make_unique<ui::TrayIcon>(*app_);
+        tray_->onQuit = [] { juce::JUCEApplication::getInstance()->systemRequestedQuit(); };
+        // tray_->onOpenSettings: the Settings panel (Task 10c).
+
+        // The one model handler: the log, then the menu-bar icon and its panel.
         app_->onModelChanged = [this] {
-            if (app_->engineState() != lastState_) {
-                lastState_ = app_->engineState();
-                log(juce::String("engine state -> ") + fixomic::toString(lastState_)
-                    + (lastState_ == EngineState::Error ? ": " + app_->lastError() : juce::String()));
-            }
+            logStateChange();
+            if (tray_ != nullptr) tray_->modelChanged();
         };
         for (const auto& warning : app_->startupWarnings()) log("startup warning: " + warning);
-        runCommands(*app_, commandLine);
-        tray_ = std::make_unique<TrayIcon>(*app_);
+#if FIXOMIC_DEV_COMMANDS
+        runCommands(*app_, *tray_, commandLine);
+#endif
     }
 
-    void anotherInstanceStarted(const juce::String& commandLine) override {
-        if (app_ != nullptr) runCommands(*app_, commandLine);
+    void anotherInstanceStarted([[maybe_unused]] const juce::String& commandLine) override {
+#if FIXOMIC_DEV_COMMANDS
+        if (app_ != nullptr && tray_ != nullptr) runCommands(*app_, *tray_, commandLine);
+#endif
     }
 
     void shutdown() override {
         tray_.reset();
         app_.reset();   // saves the config, closes the IO, unloads the plugins
+        juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
+        theme_.reset();
         scanWorker_.reset();
     }
 
     void systemRequestedQuit() override { quit(); }
 
 private:
+    void logStateChange() {
+        if (app_->engineState() == lastState_) return;
+        lastState_ = app_->engineState();
+        log(juce::String("engine state -> ") + fixomic::toString(lastState_)
+            + (lastState_ == EngineState::Error ? ": " + app_->lastError() : juce::String()));
+    }
+
     std::unique_ptr<fixomic::PluginScanWorker> scanWorker_;
+    std::unique_ptr<ui::Theme> theme_;
     std::unique_ptr<AppController> app_;
-    std::unique_ptr<TrayIcon> tray_;
+    std::unique_ptr<ui::TrayIcon> tray_;
     EngineState lastState_ = EngineState::Idle;
 };
 
