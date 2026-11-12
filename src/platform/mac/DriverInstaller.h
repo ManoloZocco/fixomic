@@ -72,6 +72,11 @@ struct Result {
 // Compiles and runs `source` with NSAppleScript. Blocking; any thread.
 Result run(const juce::String& source);
 
+// The machinery of installDriverAsync / uninstallDriverAsync: runs `work` (returns the error, ""
+// on success) on a background queue, at most one at a time (otherwise fails at once), and calls
+// `completion` on the main queue.
+void runOperation(DriverCompletion completion, std::function<juce::String()> work);
+
 } // namespace driver_script
 
 } // namespace fixomic::mac

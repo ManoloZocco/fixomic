@@ -59,28 +59,14 @@ bool waitForMic(bool present)
     return true;
 }
 
-void finish(const DriverCompletion& completion, bool ok, const juce::String& error)
+// By value: blocks capture C++ reference variables by reference, which would dangle on the main
+// queue once the background block has returned.
+void finish(DriverCompletion completion, bool ok, juce::String error)
 {
     operationRunning = false;
     dispatch_async(dispatch_get_main_queue(), ^{
         if (completion)
             completion(ok, error);
-    });
-}
-
-// Runs `work` (returns the error, "" on success) on a background queue, one operation at a time.
-void runOperation(DriverCompletion completion, std::function<juce::String()> work)
-{
-    if (operationRunning.exchange(true)) {
-        dispatch_async(dispatch_get_main_queue(), ^{
-            if (completion)
-                completion(false, text("Un'altra operazione sul driver \u00e8 in corso"));
-        });
-        return;
-    }
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        const juce::String error = work();
-        finish(completion, error.isEmpty(), error);
     });
 }
 
@@ -138,7 +124,7 @@ bool driverOperationInProgress()
 
 void installDriverAsync(DriverCompletion completion)
 {
-    runOperation(std::move(completion), [] () -> juce::String {
+    driver_script::runOperation(std::move(completion), [] () -> juce::String {
         const auto source = bundledDriverLocation();
         if (!source.isDirectory())
             return text("Il driver non \u00e8 incluso nell'app (") + source.getFullPathName() + ")";
@@ -159,7 +145,7 @@ void installDriverAsync(DriverCompletion completion)
 
 void uninstallDriverAsync(DriverCompletion completion)
 {
-    runOperation(std::move(completion), [] () -> juce::String {
+    driver_script::runOperation(std::move(completion), [] () -> juce::String {
         if (!juce::File(kInstalledDriverPath).exists())
             return {};   // nothing to remove: no password, no coreaudiod restart
         const auto result = driver_script::run(driver_script::uninstall(kInstalledDriverPath));
@@ -223,6 +209,21 @@ juce::String uninstall(const juce::String& destination, Options options)
     const juce::String command = "\"/bin/rm -rf \" & quoted form of dst" + restartTail(options);
     script << doShellScript(command, options) << "\n";
     return script;
+}
+
+void runOperation(DriverCompletion completion, std::function<juce::String()> work)
+{
+    if (operationRunning.exchange(true)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion)
+                completion(false, text("Un'altra operazione sul driver \u00e8 in corso"));
+        });
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const juce::String error = work();
+        finish(completion, error.isEmpty(), error);
+    });
 }
 
 Result run(const juce::String& source)

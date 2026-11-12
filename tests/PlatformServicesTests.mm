@@ -5,6 +5,14 @@
 #include "platform/mac/Permissions.h"
 #include "platform/mac/TapSilenceWatch.h"
 
+#import <Foundation/Foundation.h>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+#include <utility>
+#include <vector>
+
 namespace mac = fixomic::mac;
 namespace script = fixomic::mac::driver_script;
 
@@ -156,4 +164,67 @@ TEST_CASE("systemAudioPermission answers without prompting", "[permissions]")
 TEST_CASE("launch at login is readable outside an app bundle", "[loginitem]")
 {
     REQUIRE_FALSE(mac::launchAtLoginEnabled());   // fixomic_tests is never a login item
+}
+
+namespace {
+
+template <typename Predicate>
+void pumpMainQueue(double seconds, Predicate done)
+{
+    const auto end = CFAbsoluteTimeGetCurrent() + seconds;
+    while (CFAbsoluteTimeGetCurrent() < end && !done())
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+}
+
+} // namespace
+
+TEST_CASE("driver operations run off the main thread, one at a time, and complete on the main queue",
+          "[driver][installer]")
+{
+    std::atomic<bool> release{false};
+    std::atomic<bool> workOnMain{true};
+    std::vector<std::pair<bool, juce::String>> results;
+    bool completionOnMain = false;
+
+    script::runOperation(
+        [&](bool ok, juce::String error) {
+            completionOnMain = [NSThread isMainThread];
+            results.emplace_back(ok, error);
+        },
+        [&]() -> juce::String {
+            workOnMain = [NSThread isMainThread];
+            while (!release)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            return juce::String("boom ") + juce::String(42);   // a heap string, freed if captured badly
+        });
+    REQUIRE(mac::driverOperationInProgress());
+
+    // A second operation while the first runs fails at once, without running its work.
+    bool secondRan = false;
+    script::runOperation([&](bool ok, juce::String error) { results.emplace_back(ok, error); },
+                         [&]() -> juce::String {
+                             secondRan = true;
+                             return {};
+                         });
+    pumpMainQueue(2.0, [&] { return results.size() == 1; });
+    REQUIRE(results.size() == 1);
+    REQUIRE_FALSE(results[0].first);
+    REQUIRE(results[0].second.contains("in corso"));
+
+    release = true;
+    pumpMainQueue(5.0, [&] { return results.size() == 2; });
+    REQUIRE(results.size() == 2);
+    REQUIRE_FALSE(results[1].first);
+    REQUIRE(results[1].second == "boom 42");
+    REQUIRE(completionOnMain);
+    REQUIRE_FALSE(workOnMain);
+    REQUIRE_FALSE(secondRan);
+    REQUIRE_FALSE(mac::driverOperationInProgress());
+
+    script::runOperation([&](bool ok, juce::String error) { results.emplace_back(ok, error); },
+                         [] { return juce::String(); });
+    pumpMainQueue(5.0, [&] { return results.size() == 3; });
+    REQUIRE(results.size() == 3);
+    REQUIRE(results[2].first);
+    REQUIRE(results[2].second.isEmpty());
 }
