@@ -38,6 +38,8 @@ add_library(fixomic_core STATIC
     src/platform/mac/DemandMonitor.mm
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
+    src/plugins/PluginCatalog.cpp
+    src/plugins/PluginWindows.cpp
 )
 # The Core Audio layer (and its Objective-C++ tests) uses ARC (JUCE's own .mm sources are built without it).
 set_source_files_properties(
@@ -128,7 +130,7 @@ juce_add_gui_app(fixomic
     PLIST_TO_MERGE "${FIXOMIC_PLIST_ENTRIES}"
 )
 
-target_sources(fixomic PRIVATE src/app/Main.cpp)
+target_sources(fixomic PRIVATE src/app/Main.cpp src/app/AppController.cpp)
 target_compile_definitions(fixomic PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:fixomic,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
@@ -153,11 +155,20 @@ add_executable(fixomic_tests
     tests/AggregateIOTests.cpp
     tests/EngineControllerTests.cpp
     tests/MacEngineTests.mm
+    tests/PluginCatalogTests.cpp
+    tests/PluginWindowsTests.cpp
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)
 target_link_libraries(fixomic_tests PRIVATE fixomic_core Catch2::Catch2WithMain)
 set_target_properties(fixomic_tests PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+
+# Plugin scan worker for PluginCatalogTests: the production PluginScanWorker plus a test override
+# that crashes / hangs / fakes results on marker file names. Lives next to fixomic_tests.
+add_executable(fixomic_test_scan_worker tests/support/ScanWorkerMain.cpp)
+target_link_libraries(fixomic_test_scan_worker PRIVATE fixomic_core)
+set_target_properties(fixomic_test_scan_worker PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}")
+add_dependencies(fixomic_tests fixomic_test_scan_worker)
 
 enable_testing()
 list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")

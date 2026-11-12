@@ -177,6 +177,19 @@ std::vector<PluginSlot> PluginChain::saveState() const {
     return out;
 }
 
+void PluginChain::flushPluginParameters() {
+    if (maxBlockSize_.load() <= 0) return;
+    juce::MidiBuffer midi;
+    for (const auto& slot : snapshot().slots) {
+        auto* plugin = slot->plugin.get();
+        if (plugin == nullptr || plugin->getVST3Client() == nullptr) continue;
+        const int channels = std::max(plugin->getTotalNumInputChannels(), plugin->getTotalNumOutputChannels());
+        juce::AudioBuffer<float> empty(std::max(channels, 1), 0);
+        plugin->processBlock(empty, midi);
+        midi.clear();
+    }
+}
+
 std::vector<juce::String> PluginChain::restore(const std::vector<PluginSlot>& saved, const PluginFactory& factory) {
     std::vector<juce::String> errors;
     auto next = std::make_unique<Snapshot>();
@@ -222,10 +235,16 @@ void PluginChain::collectGarbage() {
     Snapshot* const busy = inUse_.load();
     std::erase_if(retired_, [busy](const std::unique_ptr<Snapshot>& s) { return s.get() != busy; });
     if (latencyChangedPending_.exchange(false)) notifyChanged();
+    if (stateChangedPending_.exchange(false) && onPluginStateChanged) onPluginStateChanged();
+}
+
+void PluginChain::audioProcessorParameterChanged(juce::AudioProcessor*, int, float) {
+    stateChangedPending_ = true;   // any thread: lock-free only
 }
 
 void PluginChain::audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails& details) {
     // May run on any thread, the audio thread included: only lock-free work off the message thread.
+    if (details.programChanged || details.nonParameterStateChanged) stateChangedPending_ = true;
     if (!details.latencyChanged) return;
     if (juce::MessageManager::existsAndIsCurrentThread())
         notifyChanged();

@@ -64,6 +64,12 @@ public:
     // Missing slots return their original descriptionXml and state verbatim.
     std::vector<PluginSlot> saveState() const;
 
+    // A hosted VST3 hands parameter changes to its processor only inside a process call, so an edit
+    // made in its editor while nothing processes is missing from its state. This gives every VST3
+    // plugin a zero-length block (the VST3 "parameter flush") so saveState() sees the edit. Only
+    // while process() is not running (engine IO closed); no-op before prepare().
+    void flushPluginParameters();
+
     // Replaces the whole chain. Slots that cannot be recreated become missing slots; returns one
     // readable error per such slot.
     std::vector<juce::String> restore(const std::vector<PluginSlot>&, const PluginFactory&);
@@ -73,8 +79,14 @@ public:
     // on any other thread are flagged lock-free and delivered by the next collectGarbage().
     std::function<void()> onChanged;
 
+    // A plugin reported a parameter, program or other state change (the user editing it, or a
+    // preset load). Plugins report these on any thread, from inside their own calls, so it is
+    // always deferred: flagged lock-free and delivered once (however many changes) by the next
+    // collectGarbage(), on the message thread. Not fired for chain edits (see onChanged).
+    std::function<void()> onPluginStateChanged;
+
     // Frees retired snapshots (and the plugins only they reference) and delivers pending
-    // latency notifications. Call it periodically from a message-thread timer.
+    // latency and plugin-state notifications. Call it periodically from a message-thread timer.
     void collectGarbage();
 
     // ---- audio thread ------------------------------------------------------------------------
@@ -88,7 +100,7 @@ private:
     struct Snapshot;
 
     void audioProcessorChanged(juce::AudioProcessor*, const ChangeDetails&) override;
-    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override {}
+    void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override;
 
     const Snapshot& snapshot() const noexcept;
     void publish(std::unique_ptr<Snapshot>);
@@ -102,6 +114,7 @@ private:
     std::atomic<Snapshot*> inUse_{nullptr}; // hazard pointer set by process()
     std::vector<std::unique_ptr<Snapshot>> retired_;
     std::atomic<bool> latencyChangedPending_{false};
+    std::atomic<bool> stateChangedPending_{false};
     juce::MidiBuffer emptyMidi_;            // MIDI for every chunk after the first
 };
 

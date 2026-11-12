@@ -5,7 +5,9 @@ namespace fixomic {
 ConfigStore::ConfigStore(juce::File file) : file_(std::move(file)) {}
 
 juce::File ConfigStore::defaultLocation() {
+    // userApplicationDataDirectory is ~/Library on macOS.
     return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+        .getChildFile("Application Support")
         .getChildFile("fixomic")
         .getChildFile("config.xml");
 }

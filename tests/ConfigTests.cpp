@@ -116,3 +116,8 @@ TEST_CASE("save then load round-trips") {
     REQUIRE(file.getParentDirectory().getNumberOfChildFiles(juce::File::findFiles) == 1);
     dir.deleteRecursively();
 }
+
+TEST_CASE("default location is ~/Library/Application Support/fixomic/config.xml") {
+    const auto expected = juce::File("~/Library/Application Support/fixomic/config.xml");
+    REQUIRE(fixomic::ConfigStore::defaultLocation() == expected);
+}

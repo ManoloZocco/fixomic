@@ -23,6 +23,7 @@ public:
                         TestLayouts layouts = TestLayouts::stereoOrMono)
         : juce::AudioPluginInstance(makeBuses(layouts)), name_(std::move(name)), layouts_(layouts), gain_(gain) {
         setLatencySamples(latencySamples);
+        addHostedParameter(std::make_unique<Parameter>());
         liveInstances.fetch_add(1);
     }
 
@@ -42,6 +43,18 @@ public:
     // updateHostDisplay(ChangeDetails().withLatencyChanged(true)), as a real plugin wrapper does.
     void changeLatency(int samples) { setLatencySamples(samples); }
 
+    // Makes the plugin look like a hosted VST3 (getVST3Client() != nullptr).
+    void pretendVst3() { vst3_ = std::make_unique<FakeVst3Client>(); }
+    juce::AudioPluginExtensions::VST3Client* getVST3Client() override { return vst3_.get(); }
+    const juce::AudioPluginExtensions::VST3Client* getVST3Client() const override { return vst3_.get(); }
+
+    // processBlock calls with an empty buffer, over all instances.
+    inline static std::atomic<int> zeroLengthBlocks{0};
+
+    // As if the user moved the plugin's one parameter in its editor (notifies listeners with
+    // audioProcessorParameterChanged on the calling thread).
+    void touchParameter(float value) { getParameters()[0]->setValueNotifyingHost(value); }
+
     void fillInPluginDescription(juce::PluginDescription& d) const override {
         d.name = d.descriptiveName = name_;
         d.pluginFormatName = "Test";
@@ -59,6 +72,7 @@ public:
     void prepareToPlay(double, int) override { prepareCalls.fetch_add(1); }
     void releaseResources() override {}
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override {
+        if (buffer.getNumSamples() == 0) zeroLengthBlocks.fetch_add(1);
         buffer.applyGain(gain_.load());
     }
     using juce::AudioPluginInstance::processBlock;
@@ -101,6 +115,24 @@ protected:
     }
 
 private:
+    struct FakeVst3Client final : juce::AudioPluginExtensions::VST3Client {
+        Steinberg::Vst::IComponent* getIComponentPtr() const noexcept override { return nullptr; }
+        juce::MemoryBlock getPreset() const override { return {}; }
+        bool setPreset(const juce::MemoryBlock&) override { return false; }
+    };
+
+    // A parameter with no effect on the audio; only there to exercise parameter notifications.
+    struct Parameter final : HostedParameter {
+        float getValue() const override { return value.load(); }
+        void setValue(float v) override { value.store(v); }
+        float getDefaultValue() const override { return 0.0f; }
+        juce::String getName(int) const override { return "Amount"; }
+        juce::String getLabel() const override { return {}; }
+        float getValueForText(const juce::String& text) const override { return text.getFloatValue(); }
+        juce::String getParameterID() const override { return "amount"; }
+        std::atomic<float> value{0.0f};
+    };
+
     static BusesProperties makeBuses(TestLayouts layouts) {
         switch (layouts) {
             case TestLayouts::stereoOrMono:
@@ -119,6 +151,7 @@ private:
 
     const juce::String name_;
     const TestLayouts layouts_;
+    std::unique_ptr<FakeVst3Client> vst3_;
     std::atomic<float> gain_;
     const std::thread::id creatorThread_ = std::this_thread::get_id();
 };

@@ -311,6 +311,56 @@ TEST_CASE("PluginChain latency change notifies", "[chain]") {
     }
 }
 
+TEST_CASE("PluginChain plugin state changes are delivered by collectGarbage", "[chain]") {
+    juce::ScopedJuceInitialiser_GUI juce;
+
+    PluginChain chain;
+    chain.prepare(kSampleRate, kBlock);
+    chain.add(plugin("a"));
+    int structural = 0, stateChanges = 0;
+    chain.onChanged = [&] { ++structural; };
+    chain.onPluginStateChanged = [&] { ++stateChanges; };
+
+    SECTION("parameter changes, from any thread, coalesce into one notification") {
+        testPluginAt(chain, 0).touchParameter(0.25f);
+        std::thread([&] { testPluginAt(chain, 0).touchParameter(0.5f); }).join();
+        REQUIRE(stateChanges == 0);   // never synchronous: it may come from inside the plugin
+        chain.collectGarbage();
+        REQUIRE(stateChanges == 1);
+        chain.collectGarbage();
+        REQUIRE(stateChanges == 1);
+    }
+
+    SECTION("program and non-parameter state changes notify too") {
+        using Details = juce::AudioProcessor::ChangeDetails;
+        testPluginAt(chain, 0).updateHostDisplay(Details{}.withProgramChanged(true));
+        chain.collectGarbage();
+        REQUIRE(stateChanges == 1);
+        std::thread([&] { testPluginAt(chain, 0).updateHostDisplay(Details{}.withNonParameterStateChanged(true)); })
+            .join();
+        chain.collectGarbage();
+        REQUIRE(stateChanges == 2);
+    }
+
+    REQUIRE(structural == 0);
+}
+
+TEST_CASE("PluginChain flushes VST3 parameters with a zero-length block", "[chain]") {
+    PluginChain chain;
+    auto vst3 = plugin("vst3");
+    vst3->pretendVst3();
+    chain.add(std::move(vst3));
+    chain.add(plugin("other format"));
+    const int before = TestPlugin::zeroLengthBlocks.load();
+
+    chain.flushPluginParameters();   // not prepared: plugins are not active, nothing to flush
+    REQUIRE(TestPlugin::zeroLengthBlocks.load() == before);
+
+    chain.prepare(kSampleRate, kBlock);
+    chain.flushPluginParameters();
+    REQUIRE(TestPlugin::zeroLengthBlocks.load() == before + 1);   // the VST3 only
+}
+
 TEST_CASE("PluginChain restore keeps missing plugins", "[chain]") {
     PluginChain chain;
     chain.prepare(kSampleRate, kBlock);
