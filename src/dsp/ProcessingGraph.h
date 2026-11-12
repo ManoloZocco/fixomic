@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include <atomic>
+#include <cstdint>
 #include <vector>
 
 #include "dsp/Meter.h"
@@ -37,7 +38,15 @@ public:
     void setAecEnabled(bool) noexcept;   // the AEC runs only if enabled && ref != nullptr
     void setBypass(bool) noexcept;       // mic -> out directly (L = R), skips AEC and chain
     void setMicPresent(bool) noexcept;   // false -> out = 0
+
     bool aecActive() const noexcept;     // state of the last block
+
+    // The next process() calls output silence for `muteSamples`, then fade in linearly over
+    // `fadeSamples` (gain k / fadeSamples for the k-th fade sample), then run at unity. Hides the
+    // pop some microphones produce right after the IO starts. Applied to the final output (bypass
+    // included) before the output meter; the AEC and the chain keep running underneath. Lock-free:
+    // callable from any thread, also while process() runs; arming again starts over.
+    void armStartupMute(int muteSamples, int fadeSamples) noexcept;
 
     Meter inputMeter, outputMeter;
 
@@ -51,6 +60,15 @@ private:
     std::atomic<bool> bypass_{false};
     std::atomic<bool> micPresent_{true};
     std::atomic<bool> aecActive_{false};
+
+    // Startup mute request: bit 63 = pending, bits 32..62 = mute samples, bits 0..31 = fade samples.
+    // One word so a request is never seen half-written; the audio thread takes it with exchange().
+    std::atomic<std::uint64_t> startupRequest_{0};
+    // Audio thread only.
+    int muteLeft_ = 0;
+    int fadeLength_ = 0;
+    int fadePosition_ = 0;
+    void applyStartupGain(float* left, float* right, int n) noexcept;
 };
 
 } // namespace fixomic

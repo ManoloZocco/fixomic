@@ -24,8 +24,36 @@ void ProcessingGraph::setBypass(bool bypass) noexcept { bypass_.store(bypass); }
 void ProcessingGraph::setMicPresent(bool present) noexcept { micPresent_.store(present); }
 bool ProcessingGraph::aecActive() const noexcept { return aecActive_.load(); }
 
+void ProcessingGraph::armStartupMute(int muteSamples, int fadeSamples) noexcept {
+    const auto mute = static_cast<std::uint64_t>(std::max(muteSamples, 0)) & 0x7fffffffu;
+    const auto fade = static_cast<std::uint64_t>(static_cast<std::uint32_t>(std::max(fadeSamples, 0)));
+    startupRequest_.store((std::uint64_t{1} << 63) | (mute << 32) | fade, std::memory_order_release);
+}
+
+void ProcessingGraph::applyStartupGain(float* left, float* right, int n) noexcept {
+    if (muteLeft_ == 0 && fadePosition_ >= fadeLength_) return;
+    int i = 0;
+    if (muteLeft_ > 0) {
+        i = std::min(muteLeft_, n);
+        std::memset(left, 0, sizeof(float) * static_cast<size_t>(i));
+        std::memset(right, 0, sizeof(float) * static_cast<size_t>(i));
+        muteLeft_ -= i;
+    }
+    for (; i < n && fadePosition_ < fadeLength_; ++i, ++fadePosition_) {
+        const float gain = static_cast<float>(fadePosition_) / static_cast<float>(fadeLength_);
+        left[i] *= gain;
+        right[i] *= gain;
+    }
+}
+
 void ProcessingGraph::process(const float* mic, const float* ref, float* outL, float* outR, int n) noexcept {
     if (n <= 0) return;
+
+    if (const std::uint64_t request = startupRequest_.exchange(0, std::memory_order_acquire); request != 0) {
+        muteLeft_ = static_cast<int>((request >> 32) & 0x7fffffffu);
+        fadeLength_ = static_cast<int>(static_cast<std::uint32_t>(request));
+        fadePosition_ = 0;
+    }
 
     const bool micPresent = micPresent_.load();
     const bool bypass = bypass_.load();
@@ -35,6 +63,7 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
     if (!micPresent) {
         std::memset(outL, 0, sizeof(float) * static_cast<size_t>(n));
         std::memset(outR, 0, sizeof(float) * static_cast<size_t>(n));
+        applyStartupGain(outL, outR, n);   // only advances the mute / fade position
         inputMeter.push(outL, n);
         outputMeter.push(outL, n);
         return;
@@ -46,7 +75,8 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
             outL[i] = s;
             outR[i] = s;
         }
-        inputMeter.push(mic, n);
+        inputMeter.push(mic, n);   // before the gain: `outL` may alias `mic`
+        applyStartupGain(outL, outR, n);
         outputMeter.push(outL, n);
         return;
     }
@@ -82,6 +112,7 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
             std::memcpy(right, work1, sizeof(float) * static_cast<size_t>(len));
         }
 
+        applyStartupGain(left, right, len);
         outputMeter.push(left, len);
     }
 }

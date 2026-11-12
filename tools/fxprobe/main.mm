@@ -11,8 +11,13 @@
 //                           runs fixomic's AggregateIO (mic + Bridge + system audio tap) for N s
 //                           (default 10), passes the mic to Bridge and prints the gate-2 criteria:
 //                           callback cadence, reference peak, overloads, effective rate
+//   fxprobe engine-test <micUid> [--seconds N] [--no-aec] [--buffer N] [--channel N]
+//                           runs the on-demand engine (AecStage + empty PluginChain + ProcessingGraph +
+//                           MacEngineBackend + DemandMonitor + EngineController) for N s (default 30)
+//                           and prints every state transition, timed against a 5 ms raw poll of
+//                           fixomic Mic's IsRunningSomewhere
 //
-// fxprobe links fixomic_core only for aggregate-test (AggregateIO / SystemAudioTap); the driver
+// fxprobe links fixomic_core only for aggregate-test and engine-test; the driver
 // checks use plain Core Audio. The binary embeds tools/fxprobe/Info.plist (microphone and system
 // audio usage strings): TCC needs them when fxprobe is its own responsible process (launchd job).
 //
@@ -35,6 +40,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <spawn.h>
@@ -44,9 +50,16 @@
 #include <unistd.h>
 #include <vector>
 
+#include "dsp/AecStage.h"
+#include "dsp/PluginChain.h"
+#include "dsp/ProcessingGraph.h"
+#include "engine/EngineController.h"
 #include "platform/mac/AggregateIO.h"
+#include "platform/mac/DemandMonitor.h"
 #include "platform/mac/FixomicDevices.h"
+#include "platform/mac/MacEngineBackend.h"
 #include "platform/mac/SystemAudioTap.h"
+#include "platform/mac/WakeObserver.h"
 
 #include <mach/mach_time.h>
 
@@ -1022,10 +1035,188 @@ int cmdAggregateTest(const AggregateTestOptions& o)
     return all ? 0 : 1;
 }
 
+
+// ---- engine-test -----------------------------------------------------------------------------
+
+struct EngineTestOptions {
+    std::string micUid;
+    double seconds = 30.0;
+    bool aec = true;
+    int buffer = 128;
+    int channel = 0;
+};
+
+std::optional<EngineTestOptions> parseEngineTest(int argc, const char* argv[])
+{
+    if (argc < 3 || argv[2][0] == '-')
+        return std::nullopt;
+    EngineTestOptions o;
+    o.micUid = argv[2];
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--no-aec")
+            o.aec = false;
+        else if (arg == "--seconds" && i + 1 < argc)
+            o.seconds = std::atof(argv[++i]);
+        else if (arg == "--buffer" && i + 1 < argc)
+            o.buffer = std::atoi(argv[++i]);
+        else if (arg == "--channel" && i + 1 < argc)
+            o.channel = std::atoi(argv[++i]);
+        else
+            return std::nullopt;
+    }
+    if (o.seconds <= 0 || o.buffer <= 0 || o.channel < 0)
+        return std::nullopt;
+    return o;
+}
+
+double epochSeconds()
+{
+    return std::chrono::duration<double>(std::chrono::system_clock::now().time_since_epoch()).count();
+}
+
+int cmdEngineTest(const EngineTestOptions& o)
+{
+    namespace mac = fixomic::mac;
+    using fixomic::EngineController;
+    using fixomic::EngineState;
+    std::signal(SIGINT, [](int) { gInterrupted = true; });
+    std::setvbuf(stdout, nullptr, _IOLBF, 0);
+
+    const auto t0 = std::chrono::steady_clock::now();
+    auto elapsed = [t0] { return std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count(); };
+
+    fixomic::Config config;
+    config.inputDeviceUid = o.micUid;
+    config.inputChannel = o.channel;
+    config.bufferSize = o.buffer;
+    config.aecEnabled = o.aec;
+
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph(aec, chain);
+    mac::MacEngineBackend backend(graph, aec, chain, [&config] { return config; });
+    EngineController engine(backend, elapsed);
+
+    std::printf("engine-test: mic %s, channel %d, buffer %d, AEC %s, %.0f s (microphone permission: %s)\n",
+                o.micUid.c_str(), o.channel, o.buffer, o.aec ? "on" : "off", o.seconds, micAuthorization());
+    std::printf("times: s since start (epoch s)\n");
+
+    // Raw demand, polled every 5 ms on a background thread: the reference the controller's 200 ms
+    // DemandMonitor is timed against.
+    std::atomic<bool> pollerStop{false};
+    std::mutex eventsMutex;
+    struct Event {
+        double t;
+        bool rawDemand;   // true: raw IsRunningSomewhere flip; false: engine state change
+        bool value;
+        EngineState state;
+    };
+    std::vector<Event> events;
+    std::thread poller([&] {
+        const AudioObjectID mic = findDevice(devices::kMicUid);
+        UInt32 last = 0;
+        while (!pollerStop) {
+            const UInt32 now = mic != kAudioObjectUnknown ? isRunningSomewhere(mic) : 0;
+            if (now != last) {
+                last = now;
+                const double t = elapsed();
+                std::printf("%8.3f s (%.3f)  raw IsRunningSomewhere=%u\n", t, epochSeconds(), now);
+                std::lock_guard<std::mutex> lock(eventsMutex);
+                events.push_back({t, true, now != 0, EngineState::Idle});
+            }
+            std::this_thread::sleep_for(5ms);
+        }
+    });
+
+    engine.onStateChanged = [&](EngineState state) {
+        const double t = elapsed();
+        std::printf("%8.3f s (%.3f)  state -> %s%s%s\n", t, epochSeconds(), fixomic::toString(state),
+                    state == EngineState::Error ? ": " : "",
+                    state == EngineState::Error ? engine.lastError().toRawUTF8() : "");
+        std::lock_guard<std::mutex> lock(eventsMutex);
+        events.push_back({t, false, false, state});
+    };
+    backend.onWarning = [&](juce::String warning) {
+        std::printf("%8.3f s  warning: %s\n", elapsed(), warning.toRawUTF8());
+    };
+    backend.onDeviceLost = [&] {
+        std::printf("%8.3f s  device lost\n", elapsed());
+        engine.onDeviceLost();
+    };
+    mac::DemandMonitor demand([&](bool inUse) {
+        std::printf("%8.3f s (%.3f)  DemandMonitor inUse=%d\n", elapsed(), epochSeconds(), inUse ? 1 : 0);
+        engine.onDemandChanged(inUse);
+    });
+    mac::WakeObserver wake([&] {
+        std::printf("%8.3f s  system wake\n", elapsed());
+        engine.onSystemWake();
+    });
+
+    engine.setConfig(config);
+    std::printf("%8.3f s  initial state %s\n", elapsed(), fixomic::toString(engine.state()));
+    demand.start();
+
+    // tick() every 200 ms, a status line every second while the IO is open. (Blocks copy captured
+    // C++ objects: capture pointers.)
+    EngineController* enginePtr = &engine;
+    mac::MacEngineBackend* backendPtr = &backend;
+    fixomic::ProcessingGraph* graphPtr = &graph;
+    __block int tickCount = 0;
+    CFRunLoopTimerRef ticker = CFRunLoopTimerCreateWithHandler(
+        kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 0.2, 0.2, 0, 0, ^(CFRunLoopTimerRef) {
+            enginePtr->tick();
+            if (++tickCount % 5 != 0 || !backendPtr->ioOpen())
+                return;
+            const auto st = backendPtr->io()->stats();
+            const auto lat = backendPtr->latency();
+            std::printf("%8.3f s    running: callbacks %llu, in peak %6.1f dBFS, out peak %6.1f dBFS, AEC %s, "
+                        "latency %.2f ms, overloads %llu\n",
+                        elapsed(), static_cast<unsigned long long>(st.callbacks), graphPtr->inputMeter.peakDb(),
+                        graphPtr->outputMeter.peakDb(), graphPtr->aecActive() ? "active" : "inactive",
+                        lat ? lat->totalMs() : 0.0, static_cast<unsigned long long>(st.overloads));
+        });
+    CFRunLoopAddTimer(CFRunLoopGetMain(), ticker, kCFRunLoopDefaultMode);
+    runMainLoopFor(o.seconds, {});
+    CFRunLoopRemoveTimer(CFRunLoopGetMain(), ticker, kCFRunLoopDefaultMode);
+    CFRelease(ticker);
+
+    demand.stop();
+    pollerStop = true;
+    poller.join();
+    const EngineState finalState = engine.state();
+    engine.onStateChanged = nullptr;
+
+    // Each raw demand flip against the first matching engine transition after it.
+    std::printf("\nsummary (final state %s):\n", fixomic::toString(finalState));
+    for (size_t i = 0; i < events.size(); ++i) {
+        if (!events[i].rawDemand)
+            continue;
+        const EngineState wanted = events[i].value ? EngineState::Running : EngineState::Idle;
+        double after = -1.0;
+        for (size_t j = i + 1; j < events.size(); ++j) {
+            if (events[j].rawDemand)
+                break;
+            if (events[j].state == wanted) {
+                after = events[j].t - events[i].t;
+                break;
+            }
+        }
+        if (after >= 0)
+            std::printf("  demand %s at %.3f s -> %s %.0f ms later\n", events[i].value ? "on " : "off",
+                        events[i].t, fixomic::toString(wanted), after * 1000.0);
+        else
+            std::printf("  demand %s at %.3f s -> no %s before the next demand change\n",
+                        events[i].value ? "on " : "off", events[i].t, fixomic::toString(wanted));
+    }
+    return 0;
+}
+
 int usage()
 {
     std::fprintf(stderr, "usage: fxprobe list | check-driver | running [seconds] | loopback-test\n"
-                         "       fxprobe aggregate-test <micUid> [--no-tap] [--seconds N] [--buffer N] [--channel N]\n");
+                         "       fxprobe aggregate-test <micUid> [--no-tap] [--seconds N] [--buffer N] [--channel N]\n"
+                         "       fxprobe engine-test <micUid> [--seconds N] [--no-aec] [--buffer N] [--channel N]\n");
     return 2;
 }
 
@@ -1050,6 +1241,10 @@ int main(int argc, const char* argv[])
         if (command == "aggregate-test") {
             const auto options = parseAggregateTest(argc, argv);
             return options ? cmdAggregateTest(*options) : usage();
+        }
+        if (command == "engine-test") {
+            const auto options = parseEngineTest(argc, argv);
+            return options ? cmdEngineTest(*options) : usage();
         }
         return usage();
     }

@@ -271,3 +271,92 @@ TEST_CASE("ProcessingGraph before prepare passes the mic through", "[graph]") {
     REQUIRE(l == mic);
     REQUIRE(r == mic);
 }
+
+namespace {
+
+constexpr int kMute = 14400;   // 300 ms at 48 kHz
+constexpr int kFade = 960;     // 20 ms
+
+// Startup-muted output of a constant mic through an empty chain (unity), fed in `block`s.
+std::vector<float> startupMuted(int block, float level = 0.5f) {
+    Rig rig(false);
+    rig.graph.armStartupMute(kMute, kFade);
+    const std::vector<float> mic(static_cast<size_t>(kMute + kFade + 2000), level);
+    std::vector<float> l, r;
+    rig.run(mic, nullptr, l, r, block);
+    REQUIRE(l == r);
+    return l;
+}
+
+void requireStartupShape(const std::vector<float>& out, float level) {
+    for (int i = 0; i < kMute; ++i) {
+        INFO("sample " << i);
+        REQUIRE(out[static_cast<size_t>(i)] == 0.0f);
+    }
+    for (int k = 0; k < kFade; ++k) {
+        INFO("fade sample " << k);
+        REQUIRE(out[static_cast<size_t>(kMute + k)]
+                == Catch::Approx(level * static_cast<float>(k) / kFade).margin(1e-6));
+    }
+    for (size_t i = kMute + kFade; i < out.size(); ++i) {
+        INFO("sample " << i);
+        REQUIRE(out[i] == level);
+    }
+}
+
+} // namespace
+
+TEST_CASE("ProcessingGraph startup mute: silence, then a linear fade-in, then unity", "[graph]") {
+    requireStartupShape(startupMuted(kBlock), 0.5f);
+}
+
+TEST_CASE("ProcessingGraph startup mute works across odd and oversized block boundaries", "[graph]") {
+    requireStartupShape(startupMuted(77), 0.5f);
+    requireStartupShape(startupMuted(4096), 0.5f);   // longer than maxBlockSize: chunked
+    requireStartupShape(startupMuted(1), 0.5f);
+}
+
+TEST_CASE("ProcessingGraph startup mute also covers bypass and is re-armable", "[graph]") {
+    Rig rig(false);
+    rig.graph.setBypass(true);
+    rig.graph.armStartupMute(kMute, kFade);
+    const std::vector<float> mic(static_cast<size_t>(kMute + kFade + 500), -0.25f);
+    std::vector<float> l, r;
+    rig.run(mic, nullptr, l, r);
+    requireStartupShape(l, -0.25f);
+    requireStartupShape(r, -0.25f);
+
+    // Armed again (next openIO): starts over.
+    rig.graph.armStartupMute(kMute, kFade);
+    rig.run(mic, nullptr, l, r);
+    requireStartupShape(l, -0.25f);
+
+    // Not armed: no mute at all.
+    Rig plain(false);
+    plain.run(mic, nullptr, l, r);
+    REQUIRE(l == mic);
+}
+
+TEST_CASE("ProcessingGraph startup mute keeps the output meter silent while muted", "[graph]") {
+    Rig rig(false);
+    rig.graph.armStartupMute(kMute, kFade);
+    const std::vector<float> mic(static_cast<size_t>(kMute / 2), 0.9f);
+    std::vector<float> l, r;
+    rig.run(mic, nullptr, l, r);
+    REQUIRE(rig.graph.outputMeter.peakDb() <= -100.0f);
+    REQUIRE(rig.graph.inputMeter.peakDb() > -1.0f);
+}
+
+TEST_CASE("ProcessingGraph startup mute never allocates", "[graph][alloc]") {
+    Rig rig;
+    rig.graph.setAecEnabled(true);
+    std::vector<float> mic(kBlock, 0.1f), ref(kBlock, 0.2f), l(kBlock), r(kBlock);
+    rig.graph.process(mic.data(), ref.data(), l.data(), r.data(), kBlock);   // warm-up
+
+    fixomic::test::startCountingAllocations();
+    rig.graph.armStartupMute(kMute, kFade);
+    for (int i = 0; i < (kMute + kFade) / kBlock + 20; ++i)
+        rig.graph.process(mic.data(), ref.data(), l.data(), r.data(), kBlock);
+    REQUIRE(fixomic::test::stopCountingAllocations() == 0);
+    REQUIRE(l[0] != 0.0f);   // past the fade by now
+}

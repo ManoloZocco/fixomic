@@ -31,15 +31,23 @@ add_library(fixomic_core STATIC
     src/dsp/AecStage.cpp
     src/dsp/PluginChain.cpp
     src/dsp/ProcessingGraph.cpp
+    src/engine/EngineController.cpp
     src/platform/mac/CoreAudioDevices.mm
     src/platform/mac/SystemAudioTap.mm
     src/platform/mac/AggregateIO.mm
+    src/platform/mac/DemandMonitor.mm
+    src/platform/mac/MacEngineBackend.mm
+    src/platform/mac/WakeObserver.mm
 )
-# The Core Audio layer is Objective-C++ with ARC (JUCE's own .mm sources are built without it).
+# The Core Audio layer (and its Objective-C++ tests) uses ARC (JUCE's own .mm sources are built without it).
 set_source_files_properties(
     src/platform/mac/CoreAudioDevices.mm
     src/platform/mac/SystemAudioTap.mm
     src/platform/mac/AggregateIO.mm
+    src/platform/mac/DemandMonitor.mm
+    src/platform/mac/MacEngineBackend.mm
+    src/platform/mac/WakeObserver.mm
+    tests/MacEngineTests.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
@@ -74,6 +82,7 @@ target_link_libraries(fixomic_core
         "-framework AudioToolbox"
         "-framework CoreFoundation"
         "-framework Foundation"
+        "-framework AppKit"
 )
 
 # Transitive closure of the modules above (property reads are not transitive), plus the
@@ -142,6 +151,8 @@ add_executable(fixomic_tests
     tests/ProcessingGraphTests.cpp
     tests/CoreAudioDevicesTests.cpp
     tests/AggregateIOTests.cpp
+    tests/EngineControllerTests.cpp
+    tests/MacEngineTests.mm
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)
