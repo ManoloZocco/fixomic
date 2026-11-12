@@ -131,7 +131,7 @@ Restrained, cool neutrals from a single stepped ramp per appearance, four state 
 - **Line Slate** (#6a727e / #7f8692): Idle, Starting, waiting for a permission prompt.
 - **Line Amber** (#b87900 / #f0b43c): global bypass; also the tint of warning notices (degraded).
 - **Line Red** (#d2342b / #ff6259): MicMissing, DriverMissing, UnsupportedSampleRate, Error; a
-  clipping meter; the closed station and its label.
+  clipping meter; the closed station and its label; a plugin that could not be added (picker).
 
 ### Neutral
 - **Cool Paper** (#f6f7f9) / **Night Platform** (#1b1e23): panel ground.
@@ -163,7 +163,8 @@ em dash "—" is the placeholder for a value not measured yet.
 
 ## Layout
 
-360 pt wide, 16 pt edges, height follows the content (≈ 400–430 pt; notices add rows). Order is
+360 pt wide, 16 pt edges, height follows the content (≈ 400–430 pt; notices add rows, each plugin
+adds a 32 pt row, the plugin picker ≈ 650 pt). Order is
 fixed by the spec: state sentence + bypass switch, route strip, notices, levels, echo
 cancellation, chain, latency, footer (Impostazioni… left, Esci right, text aligned to the content
 edges). Groups are separated by 12 pt, a 1 px hairline, 12 pt. Labels left, controls and values
@@ -198,6 +199,21 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
 - **Notice** (`NoticeRow`): amber tint (13 % light / 16 % dark) at 8 pt radius, caption text, an
   "Apri Impostazioni" push button when a System Settings pane fixes it. More than two startup
   warnings merge into one row ("N avvisi all’avvio: …") elided with "…" at three lines.
+- **Chain list** (`ChainList`): 32 pt rows in signal order, no boxes. Left to right: a drag handle
+  (2 × 3 tertiary dots), the name (Body; secondary ink when bypassed, tertiary when missing; a click
+  opens the editor, with the flat button's hover fill hugging the name), a caption at the right
+  (the plugin's latency in ms when above 0, "In bypass", "Plugin non trovato"), a switch (on = the
+  plugin processes; none for a missing plugin) and a × remove button (secondary ink, flat hover, no
+  confirmation). Dragging dims the row to 35 % and marks the drop gap with a 2 pt line in ink that
+  starts at a 7 pt ring under the handles; no line where the row would not move. Under the rows
+  the "+ Aggiungi plugin" flat button; with no plugins a caption line invites to add one first.
+- **Plugin picker** (`PluginPicker`): replaces the Catena section in place (never a window). A
+  header with a ‹ back button and "Aggiungi plugin" (Body Strong), "Cerca nuovi plugin" (flat) at
+  the right; a search field with the push button's fill, edge and 6 pt radius, a tertiary
+  magnifier and an accent focus ring; 6.5 rows of 28 pt (a cut row says it scrolls), the hovered /
+  selected one on the hover step, the manufacturer · format in secondary caption at the right; one
+  caption status line under it ("Scansione in corso…", or an add error in Line Red). The list's
+  place says "Nessun plugin trovato", or invites a scan when the catalog is empty. Esc or ‹ go back.
 - **Menu-bar icon** (`TrayIcon::iconImage`): template image, 20 pt at 2x, 1.5 pt strokes: filled
   microphone (active), outline (waiting), outline crossed by a bar with cut-outs (bypass), outline
   with a knocked-out "!" badge (problem).
