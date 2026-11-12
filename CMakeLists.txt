@@ -31,7 +31,16 @@ add_library(fixomic_core STATIC
     src/dsp/AecStage.cpp
     src/dsp/PluginChain.cpp
     src/dsp/ProcessingGraph.cpp
+    src/platform/mac/CoreAudioDevices.mm
+    src/platform/mac/SystemAudioTap.mm
+    src/platform/mac/AggregateIO.mm
 )
+# The Core Audio layer is Objective-C++ with ARC (JUCE's own .mm sources are built without it).
+set_source_files_properties(
+    src/platform/mac/CoreAudioDevices.mm
+    src/platform/mac/SystemAudioTap.mm
+    src/platform/mac/AggregateIO.mm
+    PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
 if(FIXOMIC_ASAN)
@@ -60,6 +69,11 @@ target_link_libraries(fixomic_core
         webrtc::apm
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags
+    PUBLIC
+        "-framework CoreAudio"
+        "-framework AudioToolbox"
+        "-framework CoreFoundation"
+        "-framework Foundation"
 )
 
 # Transitive closure of the modules above (property reads are not transitive), plus the
@@ -126,6 +140,8 @@ add_executable(fixomic_tests
     tests/PluginChainTests.cpp
     tests/LatencyBudgetTests.cpp
     tests/ProcessingGraphTests.cpp
+    tests/CoreAudioDevicesTests.cpp
+    tests/AggregateIOTests.cpp
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)
@@ -137,8 +153,15 @@ list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
 include(Catch)
 catch_discover_tests(fixomic_tests)
 
-# ---- fxprobe: driver diagnostics CLI (no JUCE) --------------------------------------------------
+# ---- fxprobe: driver and Core Audio diagnostics CLI --------------------------------------------
+# Links fixomic_core for `aggregate-test` (AggregateIO, SystemAudioTap). The embedded Info.plist
+# carries the microphone / system audio usage strings TCC asks for when fxprobe is its own
+# responsible process.
 add_executable(fxprobe tools/fxprobe/main.mm)
+target_link_libraries(fxprobe PRIVATE fixomic_core)
+target_link_options(fxprobe PRIVATE
+    "LINKER:-sectcreate,__TEXT,__info_plist,${CMAKE_CURRENT_SOURCE_DIR}/tools/fxprobe/Info.plist")
+set_property(TARGET fxprobe APPEND PROPERTY LINK_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/tools/fxprobe/Info.plist")
 target_include_directories(fxprobe PRIVATE src)
 target_compile_features(fxprobe PRIVATE cxx_std_20)
 target_compile_options(fxprobe PRIVATE -fobjc-arc -Wall -Wextra)

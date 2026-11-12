@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>it.manolozocco.fixomic.fxprobe</string>
+    <key>CFBundleName</key>
+    <string>fxprobe</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>fxprobe reads the microphone to test fixomic's audio path.</string>
+    <key>NSAudioCaptureUsageDescription</key>
+    <string>fxprobe records system audio to test fixomic's echo-cancellation reference.</string>
+</dict>
+</plist>

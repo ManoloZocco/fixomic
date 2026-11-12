@@ -7,6 +7,14 @@
 //   fxprobe loopback-test   writes an impulse to Bridge every 500 ms for 5 s, reads Mic,
 //                           prints the Bridge->Mic latency in samples and the impulses received
 //   fxprobe hold-mic <secs> (internal) keeps an input IOProc running on Mic, used by check 4
+//   fxprobe aggregate-test <micUid> [--no-tap] [--seconds N] [--buffer N] [--channel N]
+//                           runs fixomic's AggregateIO (mic + Bridge + system audio tap) for N s
+//                           (default 10), passes the mic to Bridge and prints the gate-2 criteria:
+//                           callback cadence, reference peak, overloads, effective rate
+//
+// fxprobe links fixomic_core only for aggregate-test (AggregateIO / SystemAudioTap); the driver
+// checks use plain Core Audio. The binary embeds tools/fxprobe/Info.plist (microphone and system
+// audio usage strings): TCC needs them when fxprobe is its own responsible process (launchd job).
 //
 // Sample times of the two devices share one timeline (the driver publishes the same zero time
 // stamps for both and indexes its ring buffer by sample time), so latency is measured as
@@ -36,7 +44,11 @@
 #include <unistd.h>
 #include <vector>
 
+#include "platform/mac/AggregateIO.h"
 #include "platform/mac/FixomicDevices.h"
+#include "platform/mac/SystemAudioTap.h"
+
+#include <mach/mach_time.h>
 
 extern char** environ;
 
@@ -760,9 +772,260 @@ int cmdHoldMic(double seconds)
     return probe.readerCallbacks.load() > 0 ? 0 : 3;
 }
 
+// ---- aggregate-test --------------------------------------------------------------------------
+
+double hostTicksToSeconds(std::uint64_t ticks)
+{
+    static const double scale = [] {
+        mach_timebase_info_data_t info{};
+        mach_timebase_info(&info);
+        return static_cast<double>(info.numer) / info.denom * 1e-9;
+    }();
+    return static_cast<double>(ticks) * scale;
+}
+
+double toDb(float peak)
+{
+    return peak > 0.0f ? 20.0 * std::log10(peak) : -200.0;
+}
+
+void atomicMax(std::atomic<float>& target, float value)
+{
+    float current = target.load(std::memory_order_relaxed);
+    while (value > current && !target.compare_exchange_weak(current, value, std::memory_order_relaxed)) {
+    }
+}
+
+// Written by the AggregateIO callback (IO thread): atomics only, no allocation.
+struct AggregateProbe {
+    std::atomic<std::uint64_t> callbacks{0};
+    std::atomic<std::uint64_t> frames{0};
+    std::atomic<std::uint64_t> lastHost{0};
+    std::atomic<std::uint64_t> maxIntervalTicks{0};
+    std::atomic<std::uint64_t> intervalsOverTwoBuffers{0};
+    std::atomic<bool> measuring{false};  // false during warm-up: intervals are not judged
+    std::atomic<float> refPeak{0.0f};    // since the last 1 s report
+    std::atomic<float> micPeak{0.0f};
+    std::atomic<float> refPeakTotal{0.0f};
+    std::atomic<std::uint64_t> nonFiniteSamples{0};
+    // First callback after warm-up: host time and frames delivered up to and including it.
+    std::atomic<std::uint64_t> firstMeasuredHost{0};
+    std::atomic<std::uint64_t> firstMeasuredFrames{0};
+    double bufferTicks = 0.0;  // one IO buffer in host ticks, set before start
+};
+
+struct AggregateTestOptions {
+    std::string micUid;
+    bool tap = true;
+    double seconds = 10.0;
+    int buffer = 128;
+    int channel = 0;
+};
+
+std::optional<AggregateTestOptions> parseAggregateTest(int argc, const char* argv[])
+{
+    if (argc < 3 || argv[2][0] == '-')
+        return std::nullopt;
+    AggregateTestOptions o;
+    o.micUid = argv[2];
+    for (int i = 3; i < argc; ++i) {
+        const std::string arg = argv[i];
+        if (arg == "--no-tap")
+            o.tap = false;
+        else if (arg == "--seconds" && i + 1 < argc)
+            o.seconds = std::atof(argv[++i]);
+        else if (arg == "--buffer" && i + 1 < argc)
+            o.buffer = std::atoi(argv[++i]);
+        else if (arg == "--channel" && i + 1 < argc)
+            o.channel = std::atoi(argv[++i]);
+        else
+            return std::nullopt;
+    }
+    if (o.seconds <= 0 || o.buffer <= 0 || o.channel < 0)
+        return std::nullopt;
+    return o;
+}
+
+void runMainLoopFor(double seconds, const std::function<bool()>& stopEarly)
+{
+    const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(seconds);
+    while (std::chrono::steady_clock::now() < end && !gInterrupted && !(stopEarly && stopEarly())) {
+        // A timer keeps the run loop alive so the main queue (property listeners) is serviced.
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.05, false);
+    }
+}
+
+int cmdAggregateTest(const AggregateTestOptions& o)
+{
+    namespace mac = fixomic::mac;
+    std::signal(SIGINT, [](int) { gInterrupted = true; });
+    CFRunLoopTimerRef keepAlive = CFRunLoopTimerCreateWithHandler(
+        kCFAllocatorDefault, CFAbsoluteTimeGetCurrent() + 3600, 3600, 0, 0, ^(CFRunLoopTimerRef) {
+        });
+    CFRunLoopAddTimer(CFRunLoopGetMain(), keepAlive, kCFRunLoopDefaultMode);
+
+    std::printf("aggregate-test: mic %s, channel %d, tap %s, buffer %d, %.0f s (microphone permission: %s)\n",
+                o.micUid.c_str(), o.channel, o.tap ? "yes" : "no", o.buffer, o.seconds, micAuthorization());
+    juce::String error;
+    std::unique_ptr<mac::SystemAudioTap> tap;
+    if (o.tap) {
+        tap = mac::SystemAudioTap::create(error);
+        if (!tap) {
+            std::printf("error: %s\n", error.toRawUTF8());
+            return 1;
+        }
+        std::printf("tap: id %u, uid %s, %.0f Hz, %d ch\n", tap->id(), tap->uid().toRawUTF8(), tap->sampleRate(),
+                    tap->channels());
+    }
+
+    AggregateProbe probe;
+    auto callback = [&probe](const float* mic, const float* ref, float* outL, float* outR, int n) {
+        const std::uint64_t now = mach_absolute_time();
+        const std::uint64_t previous = probe.lastHost.exchange(now, std::memory_order_relaxed);
+        if (previous != 0 && probe.measuring.load(std::memory_order_relaxed)) {
+            const std::uint64_t interval = now - previous;
+            if (interval > probe.maxIntervalTicks.load(std::memory_order_relaxed))
+                probe.maxIntervalTicks.store(interval, std::memory_order_relaxed);
+            if (static_cast<double>(interval) > 2.0 * probe.bufferTicks)
+                probe.intervalsOverTwoBuffers.fetch_add(1, std::memory_order_relaxed);
+        }
+        float refPeak = 0.0f, micPeak = 0.0f;
+        std::uint64_t nonFinite = 0;
+        for (int i = 0; i < n; ++i) {
+            if (!std::isfinite(mic[i]) || !std::isfinite(ref[i]))
+                ++nonFinite;
+            refPeak = std::max(refPeak, std::fabs(ref[i]));
+            micPeak = std::max(micPeak, std::fabs(mic[i]));
+            outL[i] = mic[i];
+            outR[i] = mic[i];
+        }
+        atomicMax(probe.refPeak, refPeak);
+        atomicMax(probe.micPeak, micPeak);
+        atomicMax(probe.refPeakTotal, refPeak);
+        if (nonFinite != 0)
+            probe.nonFiniteSamples.fetch_add(nonFinite, std::memory_order_relaxed);
+        probe.callbacks.fetch_add(1, std::memory_order_relaxed);
+        const std::uint64_t frames =
+            probe.frames.fetch_add(static_cast<std::uint64_t>(n), std::memory_order_relaxed) + n;
+        if (probe.measuring.load(std::memory_order_relaxed)
+            && probe.firstMeasuredHost.load(std::memory_order_relaxed) == 0) {
+            probe.firstMeasuredFrames.store(frames, std::memory_order_relaxed);
+            probe.firstMeasuredHost.store(now, std::memory_order_relaxed);
+        }
+    };
+
+    auto io = mac::AggregateIO::create({juce::String(o.micUid), o.channel, tap.get(), o.buffer}, callback, error);
+    if (!io) {
+        std::printf("error: %s\n", error.toRawUTF8());
+        return 1;
+    }
+    int deviceLost = 0;
+    io->onDeviceLost = [&deviceLost] {
+        ++deviceLost;
+        std::printf("  ! onDeviceLost\n");
+    };
+    std::printf("aggregate: id %u, buffer %d frames\n%s\n", io->deviceId(), io->bufferFrames(),
+                io->describe().toRawUTF8());
+    const double bufferSeconds = io->bufferFrames() / devices::kSampleRate;
+    probe.bufferTicks = bufferSeconds / hostTicksToSeconds(1);
+
+    if (!io->start()) {
+        std::printf("error: %s\n", io->lastError().toRawUTF8());
+        return 1;
+    }
+    // Warm-up: the first cycles after AudioDeviceStart are not representative.
+    runMainLoopFor(0.5, {});
+    if (probe.callbacks.load() == 0) {
+        runMainLoopFor(2.0, [&] { return probe.callbacks.load() > 0; });
+        if (probe.callbacks.load() == 0) {
+            std::printf("error: no IO callbacks 2.5 s after start (compare with --no-tap; check the microphone and "
+                        "\"System Audio Recording\" permissions of the app that launched fxprobe)\n");
+            io->stop();
+            return 1;
+        }
+    }
+    const auto warm = io->stats();
+    probe.maxIntervalTicks = 0;
+    probe.measuring = true;
+
+    int secondsWithRef = 0, reports = 0;
+    const double total = o.seconds;
+    for (int second = 1; second <= static_cast<int>(std::ceil(total)) && !gInterrupted; ++second) {
+        runMainLoopFor(std::min(1.0, total - (second - 1)), {});
+        const auto st = io->stats();
+        const float ref = probe.refPeak.exchange(0.0f);
+        const float mic = probe.micPeak.exchange(0.0f);
+        ++reports;
+        if (toDb(ref) > -60.0)
+            ++secondsWithRef;
+        std::printf("%4d s  callbacks %7llu  frames %9llu  ref peak %7.1f dBFS  mic peak %7.1f dBFS  overloads %llu"
+                    "  sample-time gaps %llu  max interval %.2f ms\n",
+                    second, static_cast<unsigned long long>(probe.callbacks.load()),
+                    static_cast<unsigned long long>(probe.frames.load()), toDb(ref), toDb(mic),
+                    static_cast<unsigned long long>(st.overloads),
+                    static_cast<unsigned long long>(st.sampleTimeGaps - warm.sampleTimeGaps),
+                    hostTicksToSeconds(probe.maxIntervalTicks.load()) * 1000.0);
+        std::fflush(stdout);
+    }
+    const double actualRate = io->actualSampleRate();
+    const auto lat = io->latency();
+    io->stop();  // no more callbacks: the probe values below are consistent
+    const auto st = io->stats();
+
+    // Frames delivered by the callbacks after the first measured one, over the host time between
+    // that callback and the last one: unbiased (each side counts whole callbacks).
+    const std::uint64_t hostAtStart = probe.firstMeasuredHost.load();
+    const double elapsed = hostAtStart != 0 ? hostTicksToSeconds(probe.lastHost.load() - hostAtStart) : 0.0;
+    const double measuredRate =
+        elapsed > 0 ? static_cast<double>(probe.frames.load() - probe.firstMeasuredFrames.load()) / elapsed : 0.0;
+    const double maxIntervalMs = hostTicksToSeconds(probe.maxIntervalTicks.load()) * 1000.0;
+    const std::uint64_t gaps = st.sampleTimeGaps - warm.sampleTimeGaps;
+    const std::uint64_t overloads = st.overloads;
+    const float refTotal = probe.refPeakTotal.load();
+
+    std::printf("\nlatency(): rate %.0f, input device %d, output device %d, buffer %d frames (aec %d, plugins %d) "
+                "= %.2f ms\n",
+                lat.sampleRate, lat.inputDeviceFrames, lat.outputDeviceFrames, lat.bufferFrames, lat.aecFrames,
+                lat.pluginFrames, lat.totalMs());
+    std::printf("callbacks %llu, buffer frames last %u max %u, non-finite samples %llu, device lost %d\n",
+                static_cast<unsigned long long>(st.callbacks), st.lastFrames, st.maxFrames,
+                static_cast<unsigned long long>(probe.nonFiniteSamples.load()), deviceLost);
+
+    const bool cadenceOk = probe.intervalsOverTwoBuffers.load() == 0 && gaps == 0;
+    const bool refOk = !o.tap || toDb(refTotal) > -60.0;
+    const bool overloadOk = overloads == 0;
+    const bool rateOk = std::abs(io->nominalSampleRate() - devices::kSampleRate) < 0.5
+                        && std::abs(measuredRate - devices::kSampleRate) < 0.001 * devices::kSampleRate;
+    const bool lostOk = deviceLost == 0;
+    std::printf("[a] cadence: max callback interval %.2f ms (buffer %.2f ms, limit %.2f ms), intervals > 2 buffers "
+                "%llu, sample-time gaps %llu => %s\n",
+                maxIntervalMs, bufferSeconds * 1000.0, 2 * bufferSeconds * 1000.0,
+                static_cast<unsigned long long>(probe.intervalsOverTwoBuffers.load()),
+                static_cast<unsigned long long>(gaps), cadenceOk ? "PASS" : "FAIL");
+    if (o.tap)
+        std::printf("[b] reference: peak %.1f dBFS over the run, %d/%d seconds above -60 dBFS => %s\n", toDb(refTotal),
+                    secondsWithRef, reports, refOk ? "PASS" : "FAIL");
+    else
+        std::printf("[b] reference: no tap (--no-tap) => skipped\n");
+    std::printf("[c] kAudioDeviceProcessorOverload notifications: %llu => %s\n",
+                static_cast<unsigned long long>(overloads), overloadOk ? "PASS" : "FAIL");
+    std::printf("[d] rate: nominal %.0f, measured %.2f Hz over %.2f s, HAL actual %.2f => %s\n",
+                io->nominalSampleRate(), measuredRate, elapsed, actualRate, rateOk ? "PASS" : "FAIL");
+    std::printf("[e] device lost notifications: %d => %s\n", deviceLost, lostOk ? "PASS" : "FAIL");
+    const bool all = cadenceOk && refOk && overloadOk && rateOk && lostOk;
+    std::printf("RESULT: %s\n", all ? "PASS" : "FAIL");
+
+    io.reset();
+    tap.reset();
+    CFRunLoopRemoveTimer(CFRunLoopGetMain(), keepAlive, kCFRunLoopDefaultMode);
+    CFRelease(keepAlive);
+    return all ? 0 : 1;
+}
+
 int usage()
 {
-    std::fprintf(stderr, "usage: fxprobe list | check-driver | running [seconds] | loopback-test\n");
+    std::fprintf(stderr, "usage: fxprobe list | check-driver | running [seconds] | loopback-test\n"
+                         "       fxprobe aggregate-test <micUid> [--no-tap] [--seconds N] [--buffer N] [--channel N]\n");
     return 2;
 }
 
@@ -784,6 +1047,10 @@ int main(int argc, const char* argv[])
             return cmdLoopback();
         if (command == "hold-mic" && argc > 2)
             return cmdHoldMic(std::atof(argv[2]));
+        if (command == "aggregate-test") {
+            const auto options = parseAggregateTest(argc, argv);
+            return options ? cmdAggregateTest(*options) : usage();
+        }
         return usage();
     }
 }
