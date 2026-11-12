@@ -107,19 +107,6 @@ inline constexpr int kMergedNoticeMaxLines = 3;
 std::vector<Notice> collectNotices(const juce::String& lastWarning, std::optional<mac::PrivacyPane> warningPane,
                                    const std::vector<juce::String>& startupWarnings);
 
-// ---- chain ----------------------------------------------------------------------------------------
-
-struct ChainEntry {
-    juce::String name;
-    bool bypassed = false;
-    bool missing = false;   // could not be restored
-};
-
-// The chain section's read-only line until the chain editor (Task 10b) takes its place: the plugins
-// in signal order joined by " → ", each one not processing marked "(in bypass)" or "(non trovato)".
-// "" for an empty chain (the panel then shows its empty state).
-juce::String chainSummary(const std::vector<ChainEntry>&);
-
 // ---- formatting (Italian: decimal comma) --------------------------------------------------------
 
 juce::String formatMs(double milliseconds);                // "12,7 ms"

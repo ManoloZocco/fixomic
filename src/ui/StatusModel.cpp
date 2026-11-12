@@ -141,15 +141,6 @@ std::vector<Notice> collectNotices(const juce::String& lastWarning, std::optiona
     return notices;
 }
 
-// ---- chain ------------------------------------------------------------------------------------
-
-juce::String chainSummary(const std::vector<ChainEntry>& chain) {
-    juce::StringArray parts;
-    for (const auto& entry : chain)
-        parts.add(entry.name + (entry.missing ? " (non trovato)" : entry.bypassed ? " (in bypass)" : ""));
-    return parts.joinIntoString(utf8(" \u2192 "));
-}
-
 // ---- formatting -------------------------------------------------------------------------------
 
 juce::String formatMs(double milliseconds) { return italianDecimal(milliseconds) + " ms"; }

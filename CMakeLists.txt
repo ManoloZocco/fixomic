@@ -44,7 +44,8 @@ add_library(fixomic_core STATIC
     src/platform/mac/StatusItem.mm
     src/plugins/PluginCatalog.cpp
     src/plugins/PluginWindows.cpp
-    src/ui/StatusModel.cpp   # the UI's pure logic: no AppController, no GUI
+    src/ui/ChainModel.cpp    # the UI's pure logic: no AppController, no GUI
+    src/ui/StatusModel.cpp
 )
 # The Core Audio layer (and its Objective-C++ tests) uses ARC (JUCE's own .mm sources are built without it).
 set_source_files_properties(
@@ -126,8 +127,10 @@ target_compile_definitions(fixomic_core PUBLIC
 # components too. Depends on fixomic_core, never the other way round.
 add_library(fixomic_app_lib STATIC
     src/app/AppController.cpp
+    src/ui/ChainList.cpp
     src/ui/MainPanel.cpp
     src/ui/PanelParts.cpp
+    src/ui/PluginPicker.cpp
     src/ui/Snapshot.cpp
     src/ui/Theme.cpp
     src/ui/TrayIcon.cpp
@@ -236,6 +239,8 @@ add_executable(fixomic_tests
     tests/PluginWindowsTests.cpp
     tests/PlatformServicesTests.mm
     tests/UiModelTests.cpp
+    tests/ChainModelTests.cpp
+    tests/ChainViewTests.cpp
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)

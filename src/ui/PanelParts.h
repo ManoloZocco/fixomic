@@ -48,6 +48,22 @@ private:
     RouteStrip route_;
 };
 
+// A small borderless button that shows a glyph in the secondary ink, with the flat button's hover
+// fill: a chain row's remove (×), the plugin picker's back (‹). Its button text is its accessible
+// name (not drawn).
+class GlyphButton : public juce::Button {
+public:
+    enum class Glyph { Remove, Back };
+
+    explicit GlyphButton(Glyph, const juce::String& accessibleName = {});
+    void paintButton(juce::Graphics&, bool highlighted, bool down) override;
+
+    static constexpr int kSize = 22;
+
+private:
+    Glyph glyph_;
+};
+
 // A warning, tinted, with an optional button to the System Settings pane that fixes it.
 class NoticeRow : public juce::Component {
 public:

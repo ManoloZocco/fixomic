@@ -22,10 +22,6 @@ double nowMs() { return juce::Time::getMillisecondCounterHiRes(); }
 
 void dim(juce::Component& component, bool dimmed) { component.setAlpha(dimmed ? 0.45f : 1.0f); }
 
-juce::String emptyChainText() {
-    return utf8("Nessun plugin: la voce esce con la sola cancellazione dell\u2019eco.");
-}
-
 } // namespace
 
 // ---- MainPanel --------------------------------------------------------------------------------
@@ -68,6 +64,35 @@ MainPanel::MainPanel(AppController& app) : app_(app) {
     erleLabel_.setText("Eco rimossa");
 
     chainTitle_.setText("Catena");
+    // Chain edits: the AppController applies them at once (the audio thread never waits); the
+    // list is re-read once the row's own event handler has returned.
+    chainList_.onMove = [this](int from, int to) {
+        app_.movePlugin(from, to);
+        refreshChainSoon();
+    };
+    chainList_.onBypassChanged = [this](int index, bool bypassed) {
+        app_.setPluginBypassed(index, bypassed);
+        refreshChainSoon();
+    };
+    chainList_.onRemove = [this](int index) {
+        app_.removePlugin(index);
+        refreshChainSoon();
+    };
+    chainList_.onOpenEditor = [this](int index) { app_.openEditor(index); };
+    chainList_.onAdd = [this] { showPicker(); };
+    picker_.onChoose = [this](const juce::PluginDescription& effect) {
+        auto error = app_.addPlugin(effect);
+        if (error.isEmpty()) {
+            closePicker();
+            refreshChainSoon();
+        }
+        return error;
+    };
+    picker_.onRescan = [this] {
+        app_.scanPlugins();   // onModelChanged when it is done
+        picker_.setScanning(app_.isScanning());
+    };
+    picker_.onClose = [this] { closePicker(); };
 
     latencyLabel_.setText("Latenza");
 
@@ -87,8 +112,9 @@ MainPanel::MainPanel(AppController& app) : app_(app) {
     for (juce::Component* c : std::initializer_list<juce::Component*>{
              &statusText_, &bypassLabel_, &bypassSwitch_, &route_, &inputLabel_, &outputLabel_, &inputMeter_,
              &outputMeter_, &meterScale_, &aecLabel_, &aecSwitch_, &erleLabel_, &erleValue_, &chainTitle_,
-             &chainPlaceholder_, &latencyLabel_, &latencyValue_, &latencyDetail_, &settingsButton_, &quitButton_})
+             &chainList_, &latencyLabel_, &latencyValue_, &latencyDetail_, &settingsButton_, &quitButton_})
         addAndMakeVisible(c);
+    addChildComponent(picker_);
 
     refresh(status_);
     setSize(kWidth, preferredHeight(kWidth));
@@ -106,15 +132,11 @@ void MainPanel::refresh(const StatusPresentation& status) {
     bypassSwitch_.setToggleState(bypassed, juce::dontSendNotification);
     aecSwitch_.setToggleState(config.aecEnabled, juce::dontSendNotification);
 
-    const auto slots = app_.slots();
+    refreshChain();
+    const auto& slots = chainList_.slots();
     const bool chainProcessing = std::any_of(slots.begin(), slots.end(), [](const PluginChain::SlotInfo& slot) {
         return !slot.missing && !slot.bypassed;
     });
-    std::vector<ChainEntry> chain;
-    for (const auto& slot : slots) chain.push_back({slot.name, slot.bypassed, slot.missing});
-    const auto summary = chainSummary(chain);
-    chainPlaceholder_.setText(summary.isNotEmpty() ? summary : emptyChainText());
-    chainPlaceholder_.setInk(summary.isNotEmpty() ? TextBlock::Ink::Primary : TextBlock::Ink::Secondary);
     const auto warningPane = app_.lastWarningPane();
     route_.setRoute(routeFor(status, {config.aecEnabled, app_.lastWarning().isNotEmpty(), chainProcessing}));
 
@@ -123,9 +145,8 @@ void MainPanel::refresh(const StatusPresentation& status) {
 
     // What global bypass skips recedes; it stays operable.
     for (juce::Component* c : std::initializer_list<juce::Component*>{&aecLabel_, &aecSwitch_, &erleLabel_,
-                                                                      &erleValue_, &chainTitle_, &chainPlaceholder_})
+                                                                      &erleValue_, &chainTitle_, &chainList_, &picker_})
         dim(*c, bypassed);
-    if (chainView_ != nullptr) dim(*chainView_, bypassed);
 
     const auto latency = app_.latency();
     latencyLabel_.setText(running ? "Latenza" : "Latenza stimata");
@@ -172,19 +193,65 @@ void MainPanel::updateMeters() {
     erleValue_.setText(measuring ? formatErle(app_.erleDb()) : formatErle(std::numeric_limits<float>::quiet_NaN()));
 }
 
-void MainPanel::setChainView(std::unique_ptr<juce::Component> view) {
-    if (chainView_ != nullptr) removeChildComponent(chainView_.get());
-    chainView_ = std::move(view);
-    chainPlaceholder_.setVisible(chainView_ == nullptr);
-    if (chainView_ != nullptr) addAndMakeVisible(*chainView_);
-    heightMayHaveChanged();
-    resized();
+void MainPanel::refreshChain() {
+    chainList_.setSlots(app_.slots());
+    if (pickerOpen_) {
+        picker_.setEffects(app_.effects());
+        picker_.setScanning(app_.isScanning());
+    }
 }
 
-juce::Component* MainPanel::chainView() const { return chainView_.get(); }
+void MainPanel::refreshChainSoon() {
+    juce::MessageManager::callAsync([safe = juce::Component::SafePointer<MainPanel>(this)] {
+        if (safe != nullptr) safe->refreshChain();
+    });
+}
+
+void MainPanel::showPicker() {
+    if (!pickerOpen_) {
+        pickerOpen_ = true;
+        picker_.reset();
+        refreshChain();
+        chainTitle_.setVisible(false);
+        chainList_.setVisible(false);
+        picker_.setVisible(true);
+        heightMayHaveChanged();
+        resized();
+    }
+    scrollIntoView(picker_);
+    picker_.focusSearch();
+}
+
+bool MainPanel::closePicker() {
+    if (!pickerOpen_) return false;
+    pickerOpen_ = false;
+    picker_.setVisible(false);
+    picker_.reset();
+    chainTitle_.setVisible(true);
+    chainList_.setVisible(true);
+    heightMayHaveChanged();
+    resized();
+    return true;
+}
+
+bool MainPanel::isPickerOpen() const { return pickerOpen_; }
+
+ChainList& MainPanel::chainList() { return chainList_; }
+
+PluginPicker& MainPanel::picker() { return picker_; }
+
+// In a panel clamped to the display (scrolling in its window), brings `component` into view.
+void MainPanel::scrollIntoView(const juce::Component& component) {
+    auto* viewport = findParentComponentOfClass<juce::Viewport>();
+    if (viewport == nullptr) return;
+    const auto area = viewport->getViewArea();
+    const auto bounds = component.getBounds().expanded(0, kGroupGap);
+    if (area.contains(bounds)) return;
+    viewport->setViewPosition(0, std::min(bounds.getY(), std::max(area.getY(), bounds.getBottom() - area.getHeight())));
+}
 
 void MainPanel::childBoundsChanged(juce::Component* child) {
-    if (child == nullptr || child != chainView_.get()) return;
+    if (child != &chainList_ && child != &picker_) return;
     heightMayHaveChanged();
     resized();   // the rows under the chain move; settles at once (same bounds, no new call)
 }
@@ -253,12 +320,18 @@ MainPanel::Layout MainPanel::layOut(int width) const {
     row(l.erleLabel, l.erleValue, 80, 16);
     separator();
 
-    // Chain (10b).
-    l.chainTitle = {x, y, contentWidth, 18};
-    y += 18 + 4;
-    const int chainHeight = chainView_ != nullptr ? chainView_->getHeight() : chainPlaceholder_.heightForWidth(contentWidth);
-    l.chainBody = {x, y, contentWidth, chainHeight};
-    y += chainHeight;
+    // Chain: "Catena" over the list, or the picker (with its own header) in their place. Both reach
+    // past the content edges by the flat buttons' inset, so their text lines up with it.
+    const int sectionX = x - Theme::kFlatTextInset;
+    const int sectionWidth = contentWidth + 2 * Theme::kFlatTextInset;
+    if (pickerOpen_) {
+        l.chainBody = {sectionX, y, sectionWidth, picker_.heightForWidth(sectionWidth)};
+    } else {
+        l.chainTitle = {x, y, contentWidth, 18};
+        y += 18 + 4;
+        l.chainBody = {sectionX, y, sectionWidth, chainList_.heightForWidth(sectionWidth)};
+    }
+    y += l.chainBody.getHeight();
     separator();
 
     // Latency.
@@ -271,11 +344,12 @@ MainPanel::Layout MainPanel::layOut(int width) const {
 
     // Footer: flat buttons whose text lines up with the content edges (8 pt of padding outside).
     const auto footerButton = [](const juce::TextButton& button) {
-        return juce::GlyphArrangement::getStringWidthInt(Theme::font(TextStyle::Body), button.getButtonText()) + 16;
+        return juce::GlyphArrangement::getStringWidthInt(Theme::font(TextStyle::Body), button.getButtonText())
+               + 2 * Theme::kFlatTextInset;
     };
     const int quitWidth = footerButton(quitButton_);
-    l.settingsButton = {x - 8, y, footerButton(settingsButton_), 28};
-    l.quitButton = {x + contentWidth + 8 - quitWidth, y, quitWidth, 28};
+    l.settingsButton = {x - Theme::kFlatTextInset, y, footerButton(settingsButton_), 28};
+    l.quitButton = {x + contentWidth + Theme::kFlatTextInset - quitWidth, y, quitWidth, 28};
     y += 28 + 8;
 
     l.height = y;
@@ -299,10 +373,7 @@ void MainPanel::resized() {
     erleLabel_.setBounds(l.erleLabel);
     erleValue_.setBounds(l.erleValue);
     chainTitle_.setBounds(l.chainTitle);
-    if (chainView_ != nullptr)
-        chainView_->setBounds(l.chainBody);
-    else
-        chainPlaceholder_.setBounds(l.chainBody);
+    (pickerOpen_ ? static_cast<juce::Component&>(picker_) : chainList_).setBounds(l.chainBody);
     latencyLabel_.setBounds(l.latencyLabel);
     latencyValue_.setBounds(l.latencyValue);
     latencyDetail_.setBounds(l.latencyDetail);
@@ -398,6 +469,7 @@ void MainPanelWindow::dismiss() {
     if (!isVisible()) return;
     panel_.setLive(false);
     setVisible(false);
+    panel_.closePicker();   // it reopens on the chain
     dismissedAt_ = nowMs();
 }
 
@@ -405,7 +477,7 @@ bool MainPanelWindow::dismissedJustNow() const { return nowMs() - dismissedAt_ <
 
 bool MainPanelWindow::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress::escapeKey) {
-        dismiss();
+        if (!panel_.closePicker()) dismiss();
         return true;
     }
     return juce::TopLevelWindow::keyPressed(key);

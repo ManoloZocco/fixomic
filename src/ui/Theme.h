@@ -50,6 +50,8 @@ enum class TextStyle {
 // LookAndFeel, so a forced Theme set on a component re-themes it and its children.
 //
 // TextButton styles: property "fixomic.style" = "flat" (borderless, footer) or default (push).
+// TextEditor (the plugin picker's search field): the push button's fill, edge and radius; focus ring
+// in the accent.
 class Theme : public juce::LookAndFeel_V4, private juce::DarkModeSettingListener {
 public:
     explicit Theme(Appearance = Appearance::System);
@@ -69,6 +71,9 @@ public:
     static juce::Font font(TextStyle);
     static constexpr const char* kStyleProperty = "fixomic.style";
     static constexpr const char* kFlatStyle = "flat";
+    // A flat button's text starts this far inside it: place the button this far outside the content
+    // edge and its text lines up with it.
+    static constexpr int kFlatTextInset = 8;
 
     // ---- LookAndFeel ------------------------------------------------------------------------
     void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
@@ -77,6 +82,8 @@ public:
     void drawButtonText(juce::Graphics&, juce::TextButton&, bool highlighted, bool down) override;
     juce::Font getTextButtonFont(juce::TextButton&, int buttonHeight) override;
     juce::Font getPopupMenuFont() override;
+    void fillTextEditorBackground(juce::Graphics&, int width, int height, juce::TextEditor&) override;
+    void drawTextEditorOutline(juce::Graphics&, int width, int height, juce::TextEditor&) override;
 
 private:
     void darkModeSettingChanged() override;

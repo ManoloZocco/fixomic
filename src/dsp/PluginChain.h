@@ -39,6 +39,7 @@ public:
         bool bypassed;
         bool missing;
         int latencySamples;
+        bool operator==(const SlotInfo&) const = default;
     };
 
     PluginChain();

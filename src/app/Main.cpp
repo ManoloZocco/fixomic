@@ -34,10 +34,13 @@
 //   --show-panel                opens the menu-bar panel, as a click on the icon does
 //   --tray-menu                 opens the icon's right-click menu and logs whether it is still
 //                               open 1 s later
-//   --snapshot <dir>            renders the panel (and the four icons) with the current state into
-//                               <dir>/panel-light.png, panel-dark.png, tray-light.png, tray-dark.png
-//                               at 2x; a relative <dir> is resolved against the running instance's
-//                               working directory (/ when launched with `open`): pass an absolute one
+//   --snapshot <dir>            renders into <dir>, at 2x, light and dark: the panel with the current
+//                               state (panel-*.png), the four icons (tray-*.png), and the panel with
+//                               demo chain data, never the user's: a chain of four plugins, one
+//                               bypassed and one missing (chain-*.png), no plugins (chain-empty-*.png),
+//                               the plugin picker with a search typed (picker-*.png). A relative <dir>
+//                               is resolved against the running instance's working directory (/ when
+//                               launched with `open`): pass an absolute one
 
 #ifndef FIXOMIC_DEV_COMMANDS
 #define FIXOMIC_DEV_COMMANDS 0
@@ -99,15 +102,57 @@ void printPlatformStatus(AppController& app) {
         + ")");
 }
 
-// Renders the UI with the current state. 10b / 10c add their components to `targets`.
+// Demo data for the chain section's snapshots: four plugins, one bypassed, one missing.
+std::vector<fixomic::PluginChain::SlotInfo> demoChain() {
+    return {{"Nectar 4 Gate", false, false, 48},
+            {"AUNBandEQ", true, false, 0},
+            {"De-esser", false, true, 0},
+            {"AUPeakLimiter", false, false, 0}};
+}
+
+// Demo catalog for the picker's snapshot: the effects macOS ships, and one third-party plugin.
+std::vector<juce::PluginDescription> demoEffects() {
+    std::vector<juce::PluginDescription> effects;
+    const auto add = [&](const char* name, const char* manufacturer, const char* format) {
+        juce::PluginDescription d;
+        d.name = name;
+        d.manufacturerName = manufacturer;
+        d.pluginFormatName = format;
+        d.fileOrIdentifier = juce::String(format) + "/" + name;
+        effects.push_back(d);
+    };
+    for (const auto* name : {"AUBandpass", "AUDelay", "AUDynamicsProcessor", "AUGraphicEQ", "AUHighShelfFilter",
+                             "AUMatrixReverb", "AUMultibandCompressor", "AUNBandEQ", "AUParametricEQ", "AUPeakLimiter"})
+        add(name, "Apple", "AudioUnit");
+    add("Nectar 4 Gate", "iZotope", "VST3");
+    return effects;
+}
+
+// Renders the UI: the panel with the current state, the icons, and the chain section with demo data.
 void writeSnapshots(AppController& app, const ui::TrayIcon& tray, const juce::String& path) {
     const auto directory = juce::File::getCurrentWorkingDirectory().getChildFile(path);
-    ui::MainPanel panel(app);
-    panel.refresh(tray.status());
-    panel.setSize(ui::MainPanel::kWidth, panel.preferredHeight(ui::MainPanel::kWidth));
+    const auto fit = [](ui::MainPanel& panel) {
+        panel.setSize(ui::MainPanel::kWidth, panel.preferredHeight(ui::MainPanel::kWidth));
+    };
+    ui::MainPanel panel(app), chain(app), emptyChain(app), picker(app);
+    for (auto* p : {&panel, &chain, &emptyChain, &picker}) {
+        p->refresh(tray.status());
+        fit(*p);
+    }
+    chain.chainList().setSlots(demoChain());
+    emptyChain.chainList().setSlots({});
+    picker.showPicker();
+    picker.picker().setEffects(demoEffects());
+    picker.picker().setScanning(false);
+    picker.picker().setSearchText("eq");
+    for (auto* p : {&chain, &emptyChain, &picker}) fit(*p);
     const auto icons = ui::createTrayIconSheet();
 
-    const std::vector<ui::SnapshotTarget> targets{{"panel", &panel}, {"tray", icons.get()}};
+    const std::vector<ui::SnapshotTarget> targets{{"panel", &panel},
+                                                  {"tray", icons.get()},
+                                                  {"chain", &chain},
+                                                  {"chain-empty", &emptyChain},
+                                                  {"picker", &picker}};
     juce::String error;
     for (const auto& file : ui::writeSnapshots(directory, targets, error)) log("snapshot " + file.getFullPathName());
     if (error.isNotEmpty()) log("snapshot failed: " + error);

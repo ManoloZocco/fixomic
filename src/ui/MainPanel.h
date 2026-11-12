@@ -1,6 +1,8 @@
 #pragma once
 
+#include "ui/ChainList.h"
 #include "ui/PanelParts.h"
+#include "ui/PluginPicker.h"
 #include "ui/StatusModel.h"
 #include "ui/Theme.h"
 
@@ -19,8 +21,13 @@ namespace fixomic::ui {
 
 // The menu-bar panel, ~360 pt wide, rows in the spec's order: state sentence + global bypass
 // switch and the route strip; notices (backend warning, plugins not restored); input / output
-// levels; echo cancellation switch + echo removed; the chain section (10b fills it); total latency
-// with its breakdown; settings entry (10c) and quit.
+// levels; echo cancellation switch + echo removed; the chain section; total latency with its
+// breakdown; settings entry (10c) and quit.
+//
+// The chain section is "Catena" over the ChainList, or the PluginPicker in its place while a plugin
+// is being added ("+ Aggiungi plugin"; back, Escape or a plugin added return to the list). Chain
+// edits go to the AppController, and the section re-reads the chain right after each one
+// (asynchronously, never from inside the row that asked).
 //
 // Refresh: refresh() re-reads the model on AppController::onModelChanged; a 30 Hz timer updates
 // only the meters (and the echo-removed value, the AEC's meter), and only while setLive(true).
@@ -41,10 +48,15 @@ public:
     void updateMeters();       // one read of the meters
     int preferredHeight(int width) const;
 
-    // 10b: the chain editor. Takes the place of the empty-state line under "Catena", laid out at
-    // the view's own height (set its size; the panel re-lays out when it changes).
-    void setChainView(std::unique_ptr<juce::Component>);
-    juce::Component* chainView() const;
+    // The plugin picker in place of the chain list (it takes the keyboard focus when on screen),
+    // and back. closePicker() returns whether it was open.
+    void showPicker();
+    bool closePicker();
+    bool isPickerOpen() const;
+
+    // The chain section's views. The snapshot command fills them with demo data.
+    ChainList& chainList();
+    PluginPicker& picker();
 
     std::function<void()> onOpenSettings;           // 10c; until then the button does nothing visible
     std::function<void()> onQuit;
@@ -60,6 +72,9 @@ private:
     void timerCallback() override;
     void rebuildNotices(const std::vector<Notice>&);
     void heightMayHaveChanged();
+    void refreshChain();       // the chain (and the catalog, while picking) from the AppController
+    void refreshChainSoon();   // the same, once the current event handler has returned
+    void scrollIntoView(const juce::Component&);
 
     AppController& app_;
     StatusPresentation status_;
@@ -85,8 +100,9 @@ private:
     TextBlock erleValue_{TextStyle::Caption, TextBlock::Ink::Primary, juce::Justification::topRight};
 
     TextBlock chainTitle_{TextStyle::BodyStrong, TextBlock::Ink::Primary};
-    TextBlock chainPlaceholder_{TextStyle::Caption, TextBlock::Ink::Secondary};   // summary / empty state
-    std::unique_ptr<juce::Component> chainView_;
+    ChainList chainList_;
+    PluginPicker picker_;
+    bool pickerOpen_ = false;
 
     TextBlock latencyLabel_{TextStyle::Body, TextBlock::Ink::Primary};
     TextBlock latencyValue_{TextStyle::BodyStrong, TextBlock::Ink::Primary, juce::Justification::topRight};
@@ -104,8 +120,9 @@ juce::Rectangle<int> panelWindowBounds(std::optional<juce::Rectangle<int>> ancho
                                        juce::Rectangle<int> userArea, int width, int preferredHeight);
 
 // The borderless, rounded, shadowed window the panel lives in, under the menu-bar icon, like the
-// system's menu-bar extras: it hides itself on Esc and when it stops being the active window (a
-// click elsewhere). Never taller than the display (panelWindowBounds): a longer panel scrolls.
+// system's menu-bar extras: it hides itself on Esc (the first Esc closes the plugin picker, if
+// open) and when it stops being the active window (a click elsewhere); it reopens on the chain list.
+// Never taller than the display (panelWindowBounds): a longer panel (a long chain) scrolls.
 class MainPanelWindow : public juce::TopLevelWindow {
 public:
     explicit MainPanelWindow(AppController&);

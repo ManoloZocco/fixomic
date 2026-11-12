@@ -151,6 +151,15 @@ void Theme::apply() {
     setColour(juce::PopupMenu::headerTextColourId, p.textSecondary);
     setColour(juce::PopupMenu::highlightedBackgroundColourId, p.accent);
     setColour(juce::PopupMenu::highlightedTextColourId, p.onAccent);
+    setColour(juce::TextEditor::backgroundColourId, p.control);
+    setColour(juce::TextEditor::textColourId, p.text);
+    setColour(juce::TextEditor::outlineColourId, p.controlBorder);
+    setColour(juce::TextEditor::focusedOutlineColourId, p.accent.withAlpha(0.6f));
+    setColour(juce::TextEditor::highlightColourId, p.accent.withAlpha(0.3f));   // text selection: focus
+    setColour(juce::TextEditor::highlightedTextColourId, p.text);
+    setColour(juce::CaretComponent::caretColourId, p.text);
+    setColour(juce::ListBox::backgroundColourId, juce::Colours::transparentBlack);
+    setColour(juce::ListBox::outlineColourId, juce::Colours::transparentBlack);
 }
 
 // A switch (macOS style), right-aligned in the button; the button text is its accessible name.
@@ -211,7 +220,7 @@ void Theme::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bo
     const auto& p = palette(button);
     g.setFont(getTextButtonFont(button, button.getHeight()));
     g.setColour(button.isEnabled() ? p.text : p.textTertiary);
-    const int inset = isFlat(button) ? 8 : 10;
+    const int inset = isFlat(button) ? kFlatTextInset : 10;
     g.drawText(button.getButtonText(), button.getLocalBounds().reduced(inset, 0),
                isFlat(button) ? juce::Justification::centredLeft : juce::Justification::centred, true);
 }
@@ -221,6 +230,24 @@ juce::Font Theme::getTextButtonFont(juce::TextButton& button, int) {
 }
 
 juce::Font Theme::getPopupMenuFont() { return font(TextStyle::Body); }
+
+void Theme::fillTextEditorBackground(juce::Graphics& g, int width, int height, juce::TextEditor& editor) {
+    const auto& p = palette(editor);
+    g.setColour(p.control.withMultipliedAlpha(editor.isEnabled() ? 1.0f : 0.4f));
+    g.fillRoundedRectangle(juce::Rectangle<float>(static_cast<float>(width), static_cast<float>(height)).reduced(0.5f),
+                           6.0f);
+}
+
+void Theme::drawTextEditorOutline(juce::Graphics& g, int width, int height, juce::TextEditor& editor) {
+    const auto& p = palette(editor);
+    const auto bounds = juce::Rectangle<float>(static_cast<float>(width), static_cast<float>(height)).reduced(0.5f);
+    g.setColour(p.controlBorder.withMultipliedAlpha(editor.isEnabled() ? 1.0f : 0.4f));
+    g.drawRoundedRectangle(bounds, 6.0f, 1.0f);
+    if (editor.isEnabled() && editor.hasKeyboardFocus(true) && !editor.isReadOnly()) {
+        g.setColour(p.accent.withAlpha(0.6f));
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 6.0f, 2.0f);
+    }
+}
 
 // ---- TextBlock --------------------------------------------------------------------------------
 

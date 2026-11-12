@@ -293,13 +293,6 @@ TEST_CASE("meterFraction maps -60..0 dBFS to the bar", "[ui]") {
     REQUIRE(meterFraction(std::numeric_limits<float>::quiet_NaN()) == 0.0f);
 }
 
-TEST_CASE("chainSummary lists the plugins in order until the chain editor exists", "[ui]") {
-    REQUIRE(chainSummary({}).isEmpty());
-    REQUIRE(chainSummary({{"Nectar 4 Gate", false, false}}) == "Nectar 4 Gate");
-    REQUIRE(chainSummary({{"Gate", false, false}, {"Nectar 4", true, false}, {"Old EQ", false, true}})
-            == utf8("Gate \u2192 Nectar 4 (in bypass) \u2192 Old EQ (non trovato)"));
-}
-
 // ---- panel window geometry --------------------------------------------------------------------
 
 TEST_CASE("the panel window sits under the icon and never runs off the display", "[ui]") {

@@ -135,6 +135,46 @@ void RouteStripView::paint(juce::Graphics& g) {
     }
 }
 
+// ---- GlyphButton ------------------------------------------------------------------------------
+
+GlyphButton::GlyphButton(Glyph glyph, const juce::String& accessibleName) : juce::Button(accessibleName), glyph_(glyph) {
+    setButtonText(accessibleName);
+    setMouseClickGrabsKeyboardFocus(false);
+}
+
+void GlyphButton::paintButton(juce::Graphics& g, bool highlighted, bool down) {
+    const auto& p = Theme::palette(*this);
+    const auto bounds = getLocalBounds().toFloat();
+    if (isEnabled() && (highlighted || down)) {
+        g.setColour(down ? p.separator : p.hover);
+        g.fillRoundedRectangle(bounds, 6.0f);
+    }
+    if (hasKeyboardFocus(false)) {
+        g.setColour(p.accent.withAlpha(0.6f));
+        g.drawRoundedRectangle(bounds.reduced(1.0f), 6.0f, 2.0f);
+    }
+
+    const auto c = bounds.getCentre();
+    juce::Path glyph;
+    switch (glyph_) {
+    case Glyph::Remove: {
+        const float r = 3.75f;
+        glyph.startNewSubPath(c.x - r, c.y - r);
+        glyph.lineTo(c.x + r, c.y + r);
+        glyph.startNewSubPath(c.x + r, c.y - r);
+        glyph.lineTo(c.x - r, c.y + r);
+        break;
+    }
+    case Glyph::Back:
+        glyph.startNewSubPath(c.x + 2.0f, c.y - 5.0f);
+        glyph.lineTo(c.x - 3.0f, c.y);
+        glyph.lineTo(c.x + 2.0f, c.y + 5.0f);
+        break;
+    }
+    g.setColour(isEnabled() ? p.textSecondary : p.textTertiary);
+    g.strokePath(glyph, juce::PathStrokeType(1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+}
+
 // ---- NoticeRow --------------------------------------------------------------------------------
 
 NoticeRow::NoticeRow(const Notice& notice, std::function<void(mac::PrivacyPane)> openPane) : notice_(notice) {
