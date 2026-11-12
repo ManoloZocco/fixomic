@@ -121,3 +121,30 @@ TEST_CASE("default location is ~/Library/Application Support/fixomic/config.xml"
     const auto expected = juce::File("~/Library/Application Support/fixomic/config.xml");
     REQUIRE(fixomic::ConfigStore::defaultLocation() == expected);
 }
+
+TEST_CASE("saveIfChanged skips identical content and reports failures") {
+    const auto dir = juce::File::getSpecialLocation(juce::File::tempDirectory)
+                         .getNonexistentChildFile("fixomic-config-test", "");
+    REQUIRE(dir.createDirectory());
+    const auto file = dir.getChildFile("config.xml");
+    fixomic::ConfigStore store(file);
+    fixomic::Config config;
+    config.inputDeviceUid = "mic-a";
+
+    REQUIRE(store.saveIfChanged(config) == fixomic::ConfigStore::SaveResult::Written);
+    REQUIRE(file.setLastModificationTime(juce::Time(2000, 0, 1, 0, 0)));
+    REQUIRE(store.saveIfChanged(config) == fixomic::ConfigStore::SaveResult::Unchanged);
+    REQUIRE(file.getLastModificationTime().getYear() == 2000);   // not rewritten
+
+    config.inputDeviceUid = "mic-b";
+    REQUIRE(store.saveIfChanged(config) == fixomic::ConfigStore::SaveResult::Written);
+    REQUIRE(store.load().inputDeviceUid == "mic-b");
+
+    // The parent "directory" is a plain file: the write cannot succeed.
+    const auto blocker = dir.getChildFile("blocker");
+    REQUIRE(blocker.replaceWithText("x"));
+    fixomic::ConfigStore broken(blocker.getChildFile("config.xml"));
+    REQUIRE(broken.saveIfChanged(config) == fixomic::ConfigStore::SaveResult::Failed);
+
+    dir.deleteRecursively();
+}

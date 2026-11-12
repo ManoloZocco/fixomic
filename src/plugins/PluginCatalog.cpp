@@ -1,6 +1,7 @@
 #include "plugins/PluginCatalog.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <condition_variable>
 #include <csignal>
@@ -8,6 +9,10 @@
 #include <mutex>
 #include <optional>
 #include <queue>
+#include <libproc.h>
+#include <sys/sysctl.h>
+#include <signal.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 namespace fixomic {
@@ -58,18 +63,47 @@ struct ScanRequest {
     }
 };
 
+// Direct, still running children of this process whose executable is `executable`.
+std::vector<pid_t> childrenRunning(const juce::File& executable) {
+    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
+    size_t size = 0;
+    if (sysctl(mib, 3, nullptr, &size, nullptr, 0) != 0) return {};
+    std::vector<kinfo_proc> procs(size / sizeof(kinfo_proc) + 16);
+    size = procs.size() * sizeof(kinfo_proc);
+    if (sysctl(mib, 3, procs.data(), &size, nullptr, 0) != 0) return {};
+    std::vector<pid_t> out;
+    char path[PROC_PIDPATHINFO_MAXSIZE];
+    for (size_t i = 0; i < size / sizeof(kinfo_proc); ++i) {
+        const auto& p = procs[i];
+        if (p.kp_eproc.e_ppid != getpid() || p.kp_proc.p_stat == SZOMB) continue;
+        if (proc_pidpath(p.kp_proc.p_pid, path, sizeof(path)) > 0
+            && juce::File(juce::String::fromUTF8(path)).getLinkedTarget() == executable.getLinkedTarget())
+            out.push_back(p.kp_proc.p_pid);
+    }
+    return out;
+}
+
 // Coordinator end of one worker process (JUCE AudioPluginHost's Superprocess).
 class WorkerConnection final : private juce::ChildProcessCoordinator {
 public:
     enum class State { timeout, gotResult, connectionLost };
 
     // Disconnects while the members the IPC callbacks use are still alive (the base destructor
-    // would do it only after they are gone).
-    ~WorkerConnection() override { killWorkerProcess(); }
+    // would do it only after they are gone), then reaps the worker: JUCE's ChildProcess never
+    // waits for it, which would leave a zombie per worker.
+    ~WorkerConnection() override {
+        killWorkerProcess();
+        if (pid_ > 0) reap(pid_);
+    }
 
     bool launch(const juce::File& executable) {
+        const auto before = childrenRunning(executable);
         // streamFlags 0: the worker's stdout / stderr go to /dev/null, never to a pipe nobody reads.
-        return launchWorkerProcess(executable, PluginCatalog::kWorkerId, 0, 0);
+        const bool launched = launchWorkerProcess(executable, PluginCatalog::kWorkerId, 0, 0);
+        // The new child is the one that was not there before (this thread launches one at a time).
+        for (pid_t pid : childrenRunning(executable))
+            if (std::find(before.begin(), before.end(), pid) == before.end()) pid_ = pid;
+        return launched;
     }
 
     using juce::ChildProcessCoordinator::sendMessageToWorker;
@@ -99,6 +133,20 @@ private:
         condvar_.notify_one();
     }
 
+    // The worker exits by itself once disconnected (quit when idle, _Exit when busy); give it up to
+    // 2 s, then kill it, and collect its exit status either way.
+    static void reap(pid_t pid) {
+        int status = 0;
+        for (int i = 0; i < 200; ++i) {
+            const pid_t r = waitpid(pid, &status, WNOHANG);
+            if (r == pid || (r < 0 && errno != EINTR)) return;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        kill(pid, SIGKILL);
+        while (waitpid(pid, &status, 0) < 0 && errno == EINTR) {}
+    }
+
+    pid_t pid_ = 0;
     std::mutex mutex_;
     std::condition_variable condvar_;
     std::unique_ptr<juce::XmlElement> reply_;
@@ -170,6 +218,7 @@ PluginCatalog::PluginCatalog(juce::File cacheFile, Options options)
     : cacheFile_(std::move(cacheFile)), options_(std::move(options)) {
     addFormats(formats_);
     if (auto xml = juce::parseXML(cacheFile_)) list_.recreateFromXml(*xml);
+    blacklist_ = list_.getBlacklistedFiles();
     auto scanner = std::make_unique<Scanner>(*this);
     scanner_ = scanner.get();
     list_.setCustomScanner(std::move(scanner));
@@ -233,6 +282,9 @@ void PluginCatalog::runScan() {
                 continue;
             juce::OwnedArray<juce::PluginDescription> found;
             list_.scanAndAddFile(identifier, true, found, *format);
+            // KnownPluginList's blacklist is not locked: publish a copy (only this thread mutates it).
+            const std::lock_guard<std::mutex> lock(blacklistMutex_);
+            blacklist_ = list_.getBlacklistedFiles();
         }
         saveCache();
     }
@@ -268,7 +320,10 @@ std::vector<juce::PluginDescription> PluginCatalog::effects() const {
     return out;
 }
 
-juce::StringArray PluginCatalog::blacklisted() const { return list_.getBlacklistedFiles(); }
+juce::StringArray PluginCatalog::blacklisted() const {
+    const std::lock_guard<std::mutex> lock(blacklistMutex_);
+    return blacklist_;
+}
 
 PluginFactory PluginCatalog::factory() {
     return [this](const juce::PluginDescription& description, double sampleRate, int blockSize,

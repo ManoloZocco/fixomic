@@ -15,13 +15,15 @@
 namespace fixomic::mac {
 
 MacEngineBackend::MacEngineBackend(ProcessingGraph& graph, AecStage& aec, PluginChain& chain,
-                                   std::function<Config()> configProvider)
-    : graph_(graph), aec_(aec), chain_(chain), configProvider_(std::move(configProvider))
+                                   std::function<Config()> configProvider, MicrophoneAccess micAccess)
+    : graph_(graph), aec_(aec), chain_(chain), configProvider_(std::move(configProvider)),
+      micAccess_(std::move(micAccess))
 {
 }
 
 MacEngineBackend::~MacEngineBackend()
 {
+    *alive_ = false;
     closeIO();
 }
 
@@ -51,6 +53,27 @@ bool MacEngineBackend::micSupports48k(const juce::String& uid)
 bool MacEngineBackend::openIO(bool withTap, juce::String& error)
 {
     closeIO();
+
+    // Never reach the HAL without microphone access: while the TCC prompt is up, creating the IO
+    // proc blocks the calling (main) thread until the user answers.
+    switch (micAccess_.status ? micAccess_.status() : Permission::Granted) {
+    case Permission::Granted: break;
+    case Permission::NotDetermined:
+        if (!micRequested_ && micAccess_.request) {
+            micRequested_ = true;
+            micAccess_.request([this, alive = alive_](bool granted) {
+                if (*alive && onMicrophonePermission)
+                    onMicrophonePermission(granted);
+            });
+        }
+        error = "In attesa del permesso per il microfono";
+        return false;
+    case Permission::Denied:
+        error = juce::String::fromUTF8("Permesso microfono negato: abilitalo in Impostazioni di Sistema \u2192 "
+                                       "Privacy e sicurezza \u2192 Microfono");
+        return false;
+    }
+
     const Config config = configProvider_ ? configProvider_() : Config{};
     const int block = std::max(config.bufferSize, 1);
 

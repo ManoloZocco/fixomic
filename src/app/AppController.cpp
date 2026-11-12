@@ -51,6 +51,14 @@ AppController::AppController(Options options)
         });
     };
     backend_.onDeviceLost = [this] { post([](AppController& c) { c.engine_.onDeviceLost(); }); };
+    // Answer to the microphone prompt raised by openIO(): re-evaluate (opens on demand if granted,
+    // reports the denial otherwise).
+    backend_.onMicrophonePermission = [this](bool) {
+        post([](AppController& c) {
+            c.engine_.onMicListChanged();
+            c.notify();
+        });
+    };
     engine_.onStateChanged = [this](EngineState state) {
         post([state](AppController& c) {
             if (state == EngineState::Starting) c.lastWarning_.clear();   // a fresh open reports anew
@@ -126,13 +134,30 @@ void AppController::updateConfig(std::function<void(Config&)> edit) {
     changed();
 }
 
-void AppController::saveNow() {
-    // With the IO closed nothing processes: VST3 edits would still sit in the host's queue.
-    if (!backend_.ioOpen()) chain_.flushPluginParameters();
+bool AppController::saveNow() {
+    // VST3 edits reach the plugin only inside a process call. With the IO closed nothing processes:
+    // flush here. With it open, the audio thread flushes the slots it skips (bypassed slots, every
+    // slot under global bypass); the wait is bounded so a stalled IO cannot hang the UI.
+    if (backend_.ioOpen())
+        chain_.flushPluginParametersOnAudioThread(kFlushWaitMs);
+    else
+        chain_.flushPluginParameters();
     config_.chain = chain_.saveState();
-    if (!store_.save(config_)) DBG("AppController: could not save the config");
+    const bool hadError = lastSaveError_.isNotEmpty();
+    if (store_.saveIfChanged(config_) == ConfigStore::SaveResult::Failed) {
+        // Keep the change pending: retried kSaveDebounceMs later by the timer.
+        lastSaveError_ = "Impossibile salvare la configurazione in " + store_.file().getFullPathName();
+        firstUnsavedChange_ = lastChange_ = nowMs();
+        if (!hadError) notify();
+        return false;
+    }
+    lastSaveError_.clear();
     firstUnsavedChange_ = -1.0;
+    if (hadError) notify();
+    return true;
 }
+
+juce::String AppController::lastSaveError() const { return lastSaveError_; }
 
 // ---- plugin chain -----------------------------------------------------------------------------
 

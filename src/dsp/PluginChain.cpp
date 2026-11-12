@@ -1,6 +1,8 @@
 #include "dsp/PluginChain.h"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 #include <stdexcept>
 
 namespace fixomic {
@@ -8,7 +10,8 @@ namespace fixomic {
 struct PluginChain::Slot {
     // Live slot. The listener stays registered until the slot is destroyed in collectGarbage().
     Slot(std::unique_ptr<juce::AudioPluginInstance> p, juce::AudioProcessorListener& l, bool isMono)
-        : plugin(std::move(p)), listener(&l), mono(isMono), name(plugin->getName()) {
+        : plugin(std::move(p)), listener(&l), mono(isMono), vst3(plugin->getVST3Client() != nullptr),
+          name(plugin->getName()) {
         plugin->addListener(listener);
     }
 
@@ -25,6 +28,7 @@ struct PluginChain::Slot {
     const std::unique_ptr<juce::AudioPluginInstance> plugin; // nullptr = missing
     juce::AudioProcessorListener* const listener = nullptr;
     const bool mono = false;                                 // processes channel 0 only
+    const bool vst3 = false;                                 // gets zero-length flush blocks
     const juce::String name;
     const PluginSlot saved;                                  // missing slots only
     std::atomic<bool> bypassed{false};                       // shared by every snapshot holding the slot
@@ -252,12 +256,32 @@ void PluginChain::audioProcessorChanged(juce::AudioProcessor*, const ChangeDetai
         latencyChangedPending_ = true;
 }
 
-void PluginChain::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) noexcept {
+const PluginChain::Snapshot* PluginChain::acquire() noexcept {
     Snapshot* s;
     do {
         s = current_.load();
         inUse_.store(s);
     } while (current_.load() != s);
+    return s;
+}
+
+void PluginChain::serviceFlushRequest(const Snapshot& s, bool everySlot) noexcept {
+    const std::uint32_t requested = flushRequested_.load();
+    if (requested == flushServed_.load(std::memory_order_relaxed)) return;
+    // Zero-length views: no sample is touched, no allocation for <= 32 channels.
+    float* const channels[2] = {flushScratch_, flushScratch_ + 1};
+    for (const auto& slot : s.slots) {
+        if (slot->plugin == nullptr || !slot->vst3) continue;
+        if (!everySlot && !slot->bypassed.load()) continue;   // processed this block: already delivered
+        juce::AudioBuffer<float> empty(channels, slot->mono ? 1 : 2, 0, 0);
+        emptyMidi_.clear();
+        slot->plugin->processBlock(empty, emptyMidi_);
+    }
+    flushServed_.store(requested);
+}
+
+void PluginChain::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi) noexcept {
+    const Snapshot* s = acquire();
 
     const int maxBlock = maxBlockSize_.load();
     const int total = buffer.getNumSamples();
@@ -277,9 +301,27 @@ void PluginChain::process(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& mi
                 if (slot->mono) juce::FloatVectorOperations::copy(channels[1] + start, channels[0] + start, n);
             }
         }
+        serviceFlushRequest(*s, false);
     }
 
     inUse_.store(nullptr);
+}
+
+void PluginChain::processSkipped() noexcept {
+    const Snapshot* s = acquire();
+    if (maxBlockSize_.load() > 0) serviceFlushRequest(*s, true);
+    inUse_.store(nullptr);
+}
+
+bool PluginChain::flushPluginParametersOnAudioThread(int timeoutMs) {
+    const std::uint32_t request = flushRequested_.fetch_add(1) + 1;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeoutMs);
+    // Served counts are monotonic (wrap-safe difference).
+    while (static_cast<std::int32_t>(flushServed_.load() - request) < 0) {
+        if (std::chrono::steady_clock::now() >= deadline) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return true;
 }
 
 } // namespace fixomic

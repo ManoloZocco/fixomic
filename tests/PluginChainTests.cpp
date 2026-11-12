@@ -361,6 +361,47 @@ TEST_CASE("PluginChain flushes VST3 parameters with a zero-length block", "[chai
     REQUIRE(TestPlugin::zeroLengthBlocks.load() == before + 1);   // the VST3 only
 }
 
+TEST_CASE("PluginChain flushes bypassed VST3 slots on the audio thread on request", "[chain]") {
+    PluginChain chain;
+    chain.prepare(kSampleRate, kBlock);
+    auto vst3 = plugin("bypassed vst3");
+    vst3->pretendVst3();
+    chain.add(std::move(vst3));
+    auto active = plugin("active vst3");
+    active->pretendVst3();
+    chain.add(std::move(active));      // processed normally: its edits arrive with every block
+    chain.add(plugin("bypassed other"));
+    chain.setBypassed(0, true);
+    chain.setBypassed(2, true);
+
+    SECTION("no audio thread: the wait is bounded and reports failure") {
+        const int before = TestPlugin::zeroLengthBlocks.load();
+        const auto t0 = std::chrono::steady_clock::now();
+        REQUIRE_FALSE(chain.flushPluginParametersOnAudioThread(30));
+        REQUIRE(std::chrono::steady_clock::now() - t0 < std::chrono::milliseconds(500));
+        REQUIRE(TestPlugin::zeroLengthBlocks.load() == before);
+    }
+
+    SECTION("audio thread running: acknowledged, the bypassed VST3 got one zero-length block") {
+        std::atomic<bool> stop{false};
+        std::thread audio([&] {
+            juce::AudioBuffer<float> buffer(2, kBlock);
+            juce::MidiBuffer midi;
+            while (!stop) {
+                buffer.clear();
+                chain.process(buffer, midi);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        const int before = TestPlugin::zeroLengthBlocks.load();
+        const bool acknowledged = chain.flushPluginParametersOnAudioThread(500);
+        stop = true;
+        audio.join();
+        REQUIRE(acknowledged);
+        REQUIRE(TestPlugin::zeroLengthBlocks.load() == before + 1);
+    }
+}
+
 TEST_CASE("PluginChain restore keeps missing plugins", "[chain]") {
     PluginChain chain;
     chain.prepare(kSampleRate, kBlock);

@@ -32,7 +32,9 @@ namespace fixomic {
 //
 // Config: config() is the single source of truth, also for the engine backend. It is saved 1 s
 // after the last change (settings, chain structure, bypass, plugin state, an editor closed; at most
-// 10 s after the first of a stream of changes) and on destruction. Plugin state is captured with
+// 10 s after the first of a stream of changes) and on destruction. A save is skipped when the file
+// already holds the same XML; a failed write stays pending, is retried 1 s later and is reported by
+// lastSaveError(). Plugin state is captured with
 // PluginChain::saveState() when saving. The chain field of config() is owned by the controller:
 // it reflects the chain as last saved, and edits to it through updateConfig() are ignored.
 //
@@ -63,7 +65,8 @@ public:
     const Config& config() const;
     // Edits a copy, applies it to the engine (EngineController::setConfig) and schedules a save.
     void updateConfig(std::function<void(Config&)>);
-    void saveNow();
+    bool saveNow();                      // false if the write failed (retried by the timer)
+    juce::String lastSaveError() const;  // Italian, "" after a successful save
 
     // ---- plugin chain ------------------------------------------------------------------------
     // Instantiates and appends a plugin. Returns "" on success, else a readable (Italian) error.
@@ -99,6 +102,7 @@ public:
     static constexpr int kTimerMs = 200;
     static constexpr double kSaveDebounceMs = 1000.0;
     static constexpr double kSaveMaxDelayMs = 10000.0;
+    static constexpr int kFlushWaitMs = 50;   // max wait for the audio thread's VST3 flush on save
 
 private:
     void timerCallback() override;
@@ -123,6 +127,7 @@ private:
 
     std::vector<juce::String> startupWarnings_;
     juce::String lastWarning_;
+    juce::String lastSaveError_;
     double firstUnsavedChange_ = -1.0;   // ms; -1 = nothing to save
     double lastChange_ = 0.0;
 

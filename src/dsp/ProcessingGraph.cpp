@@ -90,6 +90,7 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
         inputMeter.push(micIn, len);
 
         if (bypass) {
+            if (pos == 0) chain_.processSkipped();   // VST3 parameter flushes still get served
             // `left` may alias `micIn`; memmove-safe copy order: right first, then left.
             std::memcpy(right, micIn, sizeof(float) * static_cast<size_t>(len));
             if (left != micIn) std::memcpy(left, micIn, sizeof(float) * static_cast<size_t>(len));

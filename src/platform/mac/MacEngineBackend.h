@@ -3,6 +3,7 @@
 #include "core/Config.h"
 #include "core/LatencyBudget.h"
 #include "engine/EngineController.h"
+#include "platform/mac/Permissions.h"
 
 #include <juce_core/juce_core.h>
 
@@ -21,6 +22,12 @@ namespace fixomic::mac {
 class AggregateIO;
 class SystemAudioTap;
 
+// Where MacEngineBackend::openIO() gets the microphone authorization (injectable for tests).
+struct MicrophoneAccess {
+    std::function<Permission()> status = microphonePermission;
+    std::function<void(std::function<void(bool)>)> request = requestMicrophone;
+};
+
 // EngineBackend on Core Audio: the private aggregate (mic + fixomic Bridge + optional system audio
 // tap, Task 6) whose IOProc runs the ProcessingGraph.
 //
@@ -37,8 +44,10 @@ class SystemAudioTap;
 // else may prepare them while the IO is open.
 class MacEngineBackend : public EngineBackend {
 public:
+    using MicrophoneAccess = mac::MicrophoneAccess;
+
     MacEngineBackend(ProcessingGraph& graph, AecStage& aec, PluginChain& chain,
-                     std::function<Config()> configProvider);
+                     std::function<Config()> configProvider, MicrophoneAccess = {});
     ~MacEngineBackend() override;   // closes the IO
     MacEngineBackend(const MacEngineBackend&) = delete;
     MacEngineBackend& operator=(const MacEngineBackend&) = delete;
@@ -61,6 +70,10 @@ public:
     bool tapActive() const;            // the open IO has a system audio reference
     const AggregateIO* io() const;     // diagnostics; nullptr when closed
 
+    // The user answered the microphone prompt that openIO() raised. Main thread; re-evaluate the
+    // engine (e.g. EngineController::onMicListChanged(), deferred).
+    std::function<void(bool granted)> onMicrophonePermission;
+
     // The tap could not be created: the IO runs without echo cancellation. Main thread.
     std::function<void(juce::String)> onWarning;
     // The aggregate reported a lost / reconfigured device (forward to EngineController::onDeviceLost,
@@ -75,6 +88,9 @@ private:
     AecStage& aec_;
     PluginChain& chain_;
     std::function<Config()> configProvider_;
+    MicrophoneAccess micAccess_;
+    bool micRequested_ = false;         // the prompt is raised at most once per backend
+    std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);   // guards the prompt completion
     std::unique_ptr<SystemAudioTap> tap_;
     std::unique_ptr<AggregateIO> io_;   // destroyed before tap_
     int preparedBlock_ = 0;             // buffer size of the last successful prepare, 0 = none

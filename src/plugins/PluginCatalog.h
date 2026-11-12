@@ -7,6 +7,7 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <thread>
 #include <vector>
 
@@ -72,6 +73,8 @@ private:
     juce::AudioPluginFormatManager formats_;
     juce::KnownPluginList list_;    // internally locked: read here, filled by the scan thread
     Scanner* scanner_ = nullptr;    // owned by list_
+    mutable std::mutex blacklistMutex_;
+    juce::StringArray blacklist_;   // copy of list_'s blacklist, updated by the scan thread
     std::thread thread_;
     std::atomic<bool> scanning_{false};
     std::atomic<bool> stop_{false};

@@ -5,6 +5,7 @@
 #include "core/Config.h"
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -70,6 +71,13 @@ public:
     // while process() is not running (engine IO closed); no-op before prepare().
     void flushPluginParameters();
 
+    // The same flush while the audio thread runs: the slots it skips (bypassed ones, or every slot
+    // when the graph is globally bypassed and calls processSkipped() instead of process()) never
+    // see their queued edits. Asks the audio thread to give each skipped VST3 a zero-length block
+    // at the end of its next process() / processSkipped() and waits for it at most `timeoutMs`
+    // (sleeping 1 ms steps). True if the audio thread acknowledged in time.
+    bool flushPluginParametersOnAudioThread(int timeoutMs);
+
     // Replaces the whole chain. Slots that cannot be recreated become missing slots; returns one
     // readable error per such slot.
     std::vector<juce::String> restore(const std::vector<PluginSlot>&, const PluginFactory&);
@@ -95,6 +103,10 @@ public:
     // before prepare(), pass through; blocks longer than maxBlockSize are processed in chunks.
     void process(juce::AudioBuffer<float>& stereo, juce::MidiBuffer&) noexcept;
 
+    // For blocks in which the caller skips the chain (global bypass): serves a pending
+    // flushPluginParametersOnAudioThread() request for every slot, touches no audio.
+    void processSkipped() noexcept;
+
 private:
     struct Slot;
     struct Snapshot;
@@ -103,6 +115,8 @@ private:
     void audioProcessorParameterChanged(juce::AudioProcessor*, int, float) override;
 
     const Snapshot& snapshot() const noexcept;
+    const Snapshot* acquire() noexcept;   // audio thread: sets the hazard pointer
+    void serviceFlushRequest(const Snapshot&, bool everySlot) noexcept;
     void publish(std::unique_ptr<Snapshot>);
     void preparePlugin(juce::AudioPluginInstance&) const;
     std::shared_ptr<Slot> makeSlot(std::unique_ptr<juce::AudioPluginInstance>);
@@ -116,6 +130,9 @@ private:
     std::atomic<bool> latencyChangedPending_{false};
     std::atomic<bool> stateChangedPending_{false};
     juce::MidiBuffer emptyMidi_;            // MIDI for every chunk after the first
+    std::atomic<std::uint32_t> flushRequested_{0};   // audio-thread flush requests, counted
+    std::atomic<std::uint32_t> flushServed_{0};      // last request the audio thread served
+    float flushScratch_[2] = {};
 };
 
 } // namespace fixomic

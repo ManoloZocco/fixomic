@@ -7,6 +7,9 @@
 #include <cmath>
 #include <memory>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#include <thread>
 
 #include "dsp/AecStage.h"
 #include "dsp/Meter.h"
@@ -359,4 +362,27 @@ TEST_CASE("ProcessingGraph startup mute never allocates", "[graph][alloc]") {
         rig.graph.process(mic.data(), ref.data(), l.data(), r.data(), kBlock);
     REQUIRE(fixomic::test::stopCountingAllocations() == 0);
     REQUIRE(l[0] != 0.0f);   // past the fade by now
+}
+
+TEST_CASE("ProcessingGraph under global bypass still serves a VST3 parameter flush request", "[graph]") {
+    Rig rig(false);
+    auto vst3 = std::make_unique<TestPlugin>("vst3");
+    vst3->pretendVst3();
+    rig.chain.add(std::move(vst3));
+    rig.graph.setBypass(true);
+
+    std::atomic<bool> stop{false};
+    std::thread audio([&] {
+        std::vector<float> mic(kBlock, 0.1f), outL(kBlock), outR(kBlock);
+        while (!stop) {
+            rig.graph.process(mic.data(), nullptr, outL.data(), outR.data(), kBlock);
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    });
+    const int before = TestPlugin::zeroLengthBlocks.load();
+    const bool acknowledged = rig.chain.flushPluginParametersOnAudioThread(500);
+    stop = true;
+    audio.join();
+    REQUIRE(acknowledged);
+    REQUIRE(TestPlugin::zeroLengthBlocks.load() == before + 1);
 }

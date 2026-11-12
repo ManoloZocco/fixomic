@@ -38,4 +38,9 @@ bool ConfigStore::save(const Config& config) const {
     return temp.overwriteTargetFileWithTemporary();
 }
 
+ConfigStore::SaveResult ConfigStore::saveIfChanged(const Config& config) const {
+    if (file_.existsAsFile() && file_.loadFileAsString() == toXmlString(config)) return SaveResult::Unchanged;
+    return save(config) ? SaveResult::Written : SaveResult::Failed;
+}
+
 } // namespace fixomic

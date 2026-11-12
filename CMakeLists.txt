@@ -38,6 +38,7 @@ add_library(fixomic_core STATIC
     src/platform/mac/DemandMonitor.mm
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
+    src/platform/mac/Permissions.mm
     src/plugins/PluginCatalog.cpp
     src/plugins/PluginWindows.cpp
 )
@@ -49,6 +50,7 @@ set_source_files_properties(
     src/platform/mac/DemandMonitor.mm
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
+    src/platform/mac/Permissions.mm
     tests/MacEngineTests.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_include_directories(fixomic_core PUBLIC src)
@@ -85,6 +87,7 @@ target_link_libraries(fixomic_core
         "-framework CoreFoundation"
         "-framework Foundation"
         "-framework AppKit"
+        "-framework AVFoundation"
 )
 
 # Transitive closure of the modules above (property reads are not transitive), plus the
@@ -135,6 +138,29 @@ target_compile_definitions(fixomic PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:fixomic,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
 )
+# Code signing. Ad-hoc signatures change with every build, and macOS then asks for the microphone
+# and system-audio permissions again; a stable identity keeps the grants across rebuilds. Default:
+# the first "Apple Development" identity in the keychain, else ad-hoc ("-"). The scan worker is
+# this same binary, so it is covered. Hardened runtime only outside Debug.
+if(NOT DEFINED FIXOMIC_CODESIGN_IDENTITY)
+    set(fixomic_default_identity "-")
+    execute_process(COMMAND security find-identity -v -p codesigning
+                    OUTPUT_VARIABLE fixomic_identities ERROR_QUIET)
+    if(fixomic_identities MATCHES "\"(Apple Development: [^\"]+)\"")
+        set(fixomic_default_identity "${CMAKE_MATCH_1}")
+    endif()
+    set(FIXOMIC_CODESIGN_IDENTITY "${fixomic_default_identity}" CACHE STRING
+        "Identity for codesign of fixomic.app (\"-\" = ad-hoc)")
+endif()
+message(STATUS "fixomic: signing with ${FIXOMIC_CODESIGN_IDENTITY}")
+add_custom_command(TARGET fixomic POST_BUILD
+    COMMAND codesign --force --timestamp=none --sign "${FIXOMIC_CODESIGN_IDENTITY}"
+            --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fixomic.entitlements"
+            "$<$<NOT:$<CONFIG:Debug>>:--options=runtime>"
+            "$<TARGET_BUNDLE_DIR:fixomic>"
+    COMMAND_EXPAND_LISTS
+    VERBATIM)
+
 target_link_libraries(fixomic
     PRIVATE
         fixomic_core

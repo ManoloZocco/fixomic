@@ -4,6 +4,8 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include <CoreFoundation/CoreFoundation.h>
+#include <sys/sysctl.h>
+#include <unistd.h>
 
 #include <algorithm>
 
@@ -75,6 +77,20 @@ PluginCatalog::Options testOptions(const TempDir& tmp, int timeoutSeconds = 30) 
 void pumpMessages(int ms) {
     const auto end = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(ms);
     while (juce::Time::getMillisecondCounter() < end) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+}
+
+// Child processes of this process, zombies included: scan workers must all be reaped.
+int childProcessCount() {
+    int mib[3] = {CTL_KERN, KERN_PROC, KERN_PROC_ALL};
+    size_t size = 0;
+    if (sysctl(mib, 3, nullptr, &size, nullptr, 0) != 0) return -1;
+    std::vector<kinfo_proc> procs(size / sizeof(kinfo_proc) + 16);
+    size = procs.size() * sizeof(kinfo_proc);
+    if (sysctl(mib, 3, procs.data(), &size, nullptr, 0) != 0) return -1;
+    int count = 0;
+    for (size_t i = 0; i < size / sizeof(kinfo_proc); ++i)
+        if (procs[i].kp_eproc.e_ppid == getpid()) ++count;
+    return count;
 }
 
 // Runs the message loop until the scan's onDone fires (or ~60 s pass).
@@ -165,6 +181,8 @@ TEST_CASE("PluginCatalog blacklists a plugin that crashes the worker and keeps s
                 == std::vector<juce::String>{"0 fixomic-fake-effect Before", "b fixomic-fake-effect After"});
     }
 
+    REQUIRE(childProcessCount() == 0);   // the crashed and the finished worker were reaped
+
     // The blacklist is persisted, and a second scan skips the crasher (no new crash, same result).
     PluginCatalog catalog(cache, testOptions(tmp));
     REQUIRE(catalog.blacklisted() == juce::StringArray{crasher.getFullPathName()});
@@ -198,6 +216,7 @@ TEST_CASE("PluginCatalog destroyed mid-scan stops without blacklisting", "[catal
         pumpMessages(1500);   // worker is now stuck
         REQUIRE(catalog.isScanning());
     }   // must return promptly, not after the 30 s watchdog
+    REQUIRE(childProcessCount() == 0);   // the stuck worker was ended and reaped
     pumpMessages(200);
     REQUIRE_FALSE(called);
     PluginCatalog reread(cache);

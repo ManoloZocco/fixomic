@@ -308,3 +308,46 @@ TEST_CASE("EngineController drives the Mac backend", "[backend][hardware]")
     REQUIRE(engine.state() == fixomic::EngineState::Idle);
     REQUIRE_FALSE(e.backend.ioOpen());
 }
+
+TEST_CASE("MacEngineBackend asks for the microphone before touching the HAL", "[backend][permissions]")
+{
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph{aec, chain};
+    fixomic::Config config;
+    config.inputDeviceUid = "no-such-mic-uid";   // would fail with "not found" if the HAL were reached
+
+    mac::Permission status = mac::Permission::NotDetermined;
+    int requests = 0;
+    std::function<void(bool)> pendingCompletion;
+    mac::MacEngineBackend::MicrophoneAccess access{
+        [&] { return status; },
+        [&](std::function<void(bool)> done) {
+            ++requests;
+            pendingCompletion = std::move(done);
+        }};
+    mac::MacEngineBackend backend{graph, aec, chain, [&] { return config; }, access};
+    std::vector<bool> answers;
+    backend.onMicrophonePermission = [&](bool granted) { answers.push_back(granted); };
+
+    juce::String error;
+    REQUIRE_FALSE(backend.openIO(false, error));
+    REQUIRE(error == "In attesa del permesso per il microfono");
+    REQUIRE(requests == 1);
+    REQUIRE_FALSE(backend.openIO(false, error));   // retries do not ask again
+    REQUIRE(requests == 1);
+    REQUIRE_FALSE(backend.ioOpen());
+
+    REQUIRE(pendingCompletion);
+    pendingCompletion(true);
+    REQUIRE(answers == std::vector<bool>{true});
+
+    status = mac::Permission::Denied;
+    REQUIRE_FALSE(backend.openIO(false, error));
+    REQUIRE(error.startsWith("Permesso microfono negato"));
+    REQUIRE(requests == 1);
+
+    status = mac::Permission::Granted;   // now the HAL is reached
+    REQUIRE_FALSE(backend.openIO(false, error));
+    REQUIRE(error.contains("not found"));
+}
