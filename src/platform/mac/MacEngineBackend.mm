@@ -54,10 +54,17 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
     const Config config = configProvider_ ? configProvider_() : Config{};
     const int block = std::max(config.bufferSize, 1);
 
-    // The IO is closed: nothing runs process() while these (allocating) prepares run. The chain
-    // keeps its plugins; they are only prepared again.
-    aec_.prepare(devices::kSampleRate, block);
-    chain_.prepare(devices::kSampleRate, block);
+    // The IO is closed: nothing runs process() while these (allocating) calls run. Re-preparing
+    // the chain would call prepareToPlay on every plugin (slow, and it resets their state) at every
+    // start, so it happens only when the block size changes (the rate is always 48 kHz). The AEC
+    // is reset instead of re-prepared: same buffers, fresh APM state.
+    if (block != preparedBlock_) {
+        aec_.prepare(devices::kSampleRate, block);
+        chain_.prepare(devices::kSampleRate, block);
+        preparedBlock_ = block;   // prepares cannot fail: retries after a failed open skip them
+    } else {
+        aec_.reset();
+    }
     graph_.prepare(devices::kSampleRate, block);
     graph_.setAecEnabled(config.aecEnabled);
     graph_.setBypass(config.globalBypass);
@@ -99,6 +106,17 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
     }
     io_ = std::move(io);
     return true;
+}
+
+void MacEngineBackend::forgetPrepared()
+{
+    preparedBlock_ = 0;
+}
+
+void MacEngineBackend::applyFlags(bool aecEnabled, bool bypass)
+{
+    graph_.setAecEnabled(aecEnabled);
+    graph_.setBypass(bypass);
 }
 
 void MacEngineBackend::closeIO()

@@ -21,6 +21,11 @@ struct FakeBackend : EngineBackend {
     int opens = 0, closes = 0;
     std::vector<bool> openTaps;       // withTap of every openIO call
     bool open = false;
+    struct Flags {
+        bool aec, bypass;
+        bool operator==(const Flags&) const = default;
+    };
+    std::vector<Flags> flags;         // every applyFlags call
 
     bool driverInstalled() override { return driver; }
     bool micAvailable(const juce::String& uid) override { micAsked = uid; return mic; }
@@ -38,6 +43,10 @@ struct FakeBackend : EngineBackend {
     void closeIO() override {
         ++closes;
         open = false;
+    }
+    void applyFlags(bool aec, bool bypass) override {
+        REQUIRE(open);   // only for an open IO
+        flags.push_back({aec, bypass});
     }
 };
 
@@ -198,9 +207,33 @@ TEST_CASE("EngineController with AEC off opens the IO without a tap", "[engine]"
     REQUIRE(rig.engine.state() == EngineState::Running);
     REQUIRE(rig.backend.openTaps == std::vector<bool>{false});
 
+    // Bypass keeps the tap: switching it back must be instant.
     Rig bypassed(micConfig(true, true));
     bypassed.engine.onDemandChanged(true);
-    REQUIRE(bypassed.backend.openTaps == std::vector<bool>{false});
+    REQUIRE(bypassed.backend.openTaps == std::vector<bool>{true});
+}
+
+TEST_CASE("EngineController bypass toggle while running applies flags without a rebuild", "[engine]") {
+    using Flags = FakeBackend::Flags;
+    for (const bool aec : {true, false}) {
+        INFO("AEC " << aec);
+        Rig rig(micConfig(aec));
+        rig.engine.onDemandChanged(true);
+        rig.changes.clear();
+
+        rig.engine.setConfig(micConfig(aec, true));
+        rig.engine.setConfig(micConfig(aec, false));
+        REQUIRE(rig.backend.opens == 1);
+        REQUIRE(rig.backend.closes == 0);
+        REQUIRE(rig.backend.flags == std::vector<Flags>{{aec, true}, {aec, false}});
+        REQUIRE(rig.changes.empty());
+        REQUIRE(rig.engine.state() == EngineState::Running);
+    }
+
+    // Not open: nothing to apply (openIO reads the flags itself).
+    Rig idle;
+    idle.engine.setConfig(micConfig(true, true));
+    REQUIRE(idle.backend.flags.empty());
 }
 
 TEST_CASE("EngineController driver missing", "[engine]") {
@@ -294,13 +327,59 @@ TEST_CASE("EngineController openIO failure is an Error retried while in demand",
     gaveUp.engine.onDemandChanged(true);
     gaveUp.engine.onDemandChanged(false);   // nothing to stop: Idle right away
     REQUIRE(gaveUp.engine.state() == EngineState::Idle);
+    REQUIRE(gaveUp.engine.lastError().contains("aggregate exploded"));   // the reason is kept
     gaveUp.runUntil(20.0);
     REQUIRE(gaveUp.backend.opens == 1);
+}
+
+TEST_CASE("EngineController a failed rebuild without demand ends in Idle, not Error", "[engine]") {
+    Rig rig;
+    rig.engine.onDemandChanged(true);
+    rig.engine.onDemandChanged(false);   // grace period running
+    rig.backend.openFails = true;
+    rig.engine.onDefaultOutputChanged();   // rebuild fails while nobody needs the IO
+    REQUIRE(rig.engine.state() == EngineState::Idle);
+    REQUIRE_FALSE(rig.engine.ioOpen());
+    rig.runUntil(20.0);
+    REQUIRE(rig.engine.state() == EngineState::Idle);
+    REQUIRE(rig.backend.opens == 2);   // no retries without demand
+
+    // In Error with demand, then demand leaves: tick() settles in Idle too.
+    Rig err;
+    err.backend.openFails = true;
+    err.engine.onDemandChanged(true);
+    REQUIRE(err.engine.state() == EngineState::Error);
+    err.engine.onDemandChanged(false);
+    err.runUntil(5.0);
+    REQUIRE(err.engine.state() == EngineState::Idle);
+}
+
+TEST_CASE("EngineController throttles a device lost right after opening", "[engine]") {
+    Rig rig;
+    rig.engine.onDemandChanged(true);   // opened at t = 0
+    rig.now = 0.5;
+    rig.engine.onDeviceLost();          // lost again within kLostAfterOpenSeconds
+    REQUIRE(rig.backend.closes == 1);
+    REQUIRE(rig.backend.opens == 1);    // no immediate reopen
+    REQUIRE(rig.engine.state() == EngineState::Error);
+    REQUIRE(rig.engine.lastError().contains("lost"));
+
+    rig.runUntil(0.5 + EngineController::kRetrySeconds - 0.1);
+    REQUIRE(rig.backend.opens == 1);
+    rig.runUntil(0.5 + EngineController::kRetrySeconds + 0.1);
+    REQUIRE(rig.backend.opens == 2);
+    REQUIRE(rig.engine.state() == EngineState::Running);
+
+    // Lost with the mic gone: MicMissing, not the throttle.
+    rig.backend.mic = false;
+    rig.engine.onDeviceLost();
+    REQUIRE(rig.engine.state() == EngineState::MicMissing);
 }
 
 TEST_CASE("EngineController device lost reopens the IO while in demand", "[engine]") {
     Rig rig;
     rig.engine.onDemandChanged(true);
+    rig.runUntil(5.0);   // well after the open: no throttling
     rig.engine.onDeviceLost();
     REQUIRE(rig.backend.closes == 1);
     REQUIRE(rig.backend.opens == 2);
@@ -335,6 +414,10 @@ TEST_CASE("EngineController rebuilds the IO only for IO-shaping config changes",
     rig.engine.setConfig(c);
     REQUIRE(rig.backend.opens == 3);
     REQUIRE(rig.backend.openTaps.back() == false);
+
+    c.globalBypass = true;   // flags only
+    rig.engine.setConfig(c);
+    REQUIRE(rig.backend.opens == 3);
 
     c.inputChannel = 1;
     rig.engine.setConfig(c);

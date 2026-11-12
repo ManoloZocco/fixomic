@@ -33,6 +33,7 @@ public:
 
     // Instances alive right now, and instances destroyed on a thread other than their creator's.
     inline static std::atomic<int> liveInstances{0};
+    inline static std::atomic<int> prepareCalls{0};   // prepareToPlay over all instances
     inline static std::atomic<int> destroyedOnAnotherThread{0};
 
     float gain() const noexcept { return gain_.load(); }
@@ -55,7 +56,7 @@ public:
     }
 
     const juce::String getName() const override { return name_; }
-    void prepareToPlay(double, int) override {}
+    void prepareToPlay(double, int) override { prepareCalls.fetch_add(1); }
     void releaseResources() override {}
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override {
         buffer.applyGain(gain_.load());

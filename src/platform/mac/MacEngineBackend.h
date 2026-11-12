@@ -24,9 +24,11 @@ class SystemAudioTap;
 // EngineBackend on Core Audio: the private aggregate (mic + fixomic Bridge + optional system audio
 // tap, Task 6) whose IOProc runs the ProcessingGraph.
 //
-// openIO() reads the config through `configProvider`, prepares the AEC stage, the plugin chain
-// and the graph for 48 kHz and the configured buffer size (plugins are re-prepared, never
-// unloaded: closeIO() leaves the chain alone), applies the AEC / bypass flags, creates the tap
+// openIO() reads the config through `configProvider`. The AEC stage and the plugin chain are
+// prepared for 48 kHz and the configured buffer size only when that differs from the last
+// successful open (plugins keep their state and are never unloaded: closeIO() leaves the chain
+// alone); otherwise the AEC is just reset (fresh echo estimate). The graph is prepared, the AEC /
+// bypass flags applied, then openIO() creates the tap
 // when asked (if that fails the IO opens without it, AEC inactive, and onWarning says why),
 // creates the aggregate, arms the graph's startup mute (kStartupMuteSamples + kStartupFadeSamples)
 // and starts it.
@@ -46,6 +48,11 @@ public:
     bool micSupports48k(const juce::String& uid) override;   // offers 48 kHz among its nominal rates
     bool openIO(bool withTap, juce::String& error) override;
     void closeIO() override;
+    void applyFlags(bool aecEnabled, bool bypass) override;   // graph flags, no rebuild
+
+    // Call after other code prepared the AEC stage or the chain with other settings: the next
+    // openIO() prepares them again.
+    void forgetPrepared();
 
     // Of the open IO (nullopt when closed): device and buffer frames from the aggregate, aecFrames
     // when the AEC ran on the last block, pluginFrames unless globally bypassed.
@@ -70,6 +77,7 @@ private:
     std::function<Config()> configProvider_;
     std::unique_ptr<SystemAudioTap> tap_;
     std::unique_ptr<AggregateIO> io_;   // destroyed before tap_
+    int preparedBlock_ = 0;             // buffer size of the last successful prepare, 0 = none
 };
 
 } // namespace fixomic::mac

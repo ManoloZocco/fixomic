@@ -23,11 +23,14 @@ struct EngineBackend {
     // `error` filled on failure, with nothing left open.
     virtual bool openIO(bool withTap, juce::String& error) = 0;
     virtual void closeIO() = 0;   // no-op when nothing is open
+    // Applies the AEC / bypass switches to the open IO without rebuilding it (no gap, no startup
+    // mute). Called only while the IO is open.
+    virtual void applyFlags(bool aecEnabled, bool bypass) = 0;
 };
 
 // On-demand engine state machine. The IO is open only while some app reads fixomic Mic:
 //
-//   demand on   -> Starting -> openIO(withTap = aecEnabled && !globalBypass) -> Running
+//   demand on   -> Starting -> openIO(withTap = aecEnabled) -> Running
 //   demand off  -> IO closed kStopGraceSeconds later, unless demand comes back first -> Idle
 //
 // Device conditions are checked on every event, with or without demand, in this order: driver
@@ -35,12 +38,19 @@ struct EngineBackend {
 // 48 kHz -> UnsupportedSampleRate. In those states no IO is open (fixomic Mic is silent: the driver
 // outputs silence without a writer) and the controller never falls back to another microphone.
 // A failed openIO() -> Error (lastError()), retried every kRetrySeconds from tick() while there is
-// demand, and on every event.
+// demand, and on every event; without demand a failure ends in Idle (lastError() keeps the reason).
+// A device lost within kLostAfterOpenSeconds of a successful open is not reopened at once (that
+// could loop): Error, retried by tick() like a failed open.
+//
+// Global bypass keeps the IO and its tap (the graph just skips AEC and chain), so toggling it is
+// instant: applied through EngineBackend::applyFlags().
 //
 // The plugin chain is not the controller's business: stopping never unloads plugins.
 //
 // Threading: everything, onStateChanged included, runs on the message thread. onStateChanged fires
-// only when the state actually changes.
+// only when the state actually changes. Its handler (like the backend's warning / device-lost
+// handlers) must not call back into the controller synchronously: defer such calls (e.g.
+// juce::MessageManager::callAsync).
 class EngineController {
 public:
     EngineController(EngineBackend&, std::function<double()> nowSeconds);
@@ -48,8 +58,9 @@ public:
     EngineController(const EngineController&) = delete;
     EngineController& operator=(const EngineController&) = delete;
 
-    // Input device, channel, buffer size or tap use (aecEnabled && !globalBypass) changed while the
-    // IO is open -> closeIO + openIO. Other fields only get stored.
+    // Input device, channel, buffer size or aecEnabled (tap use) changed while the IO is open ->
+    // closeIO + openIO. globalBypass changed while open -> applyFlags() only. Other fields are
+    // only stored.
     void setConfig(const Config&);
     void onDemandChanged(bool inUse);
     void onMicListChanged();         // re-checks the devices: a mic that came back restarts on demand
@@ -66,9 +77,11 @@ public:
 
     static constexpr double kStopGraceSeconds = 3.0;   // plan decision
     static constexpr double kRetrySeconds = 2.0;
+    static constexpr double kLostAfterOpenSeconds = 1.0;
 
 private:
     static bool wantsTap(const Config&);
+    EngineState blockedState();   // DriverMissing / MicMissing / UnsupportedSampleRate, or Idle
     void evaluate();
     void open();
     void close();
@@ -82,6 +95,7 @@ private:
     bool ioOpen_ = false;
     bool ioWithTap_ = false;
     double lastAttempt_ = 0.0;
+    double lastOpened_ = 0.0;
     EngineState state_ = EngineState::Idle;
     juce::String lastError_;
 };

@@ -20,14 +20,20 @@ EngineController::EngineController(EngineBackend& backend, std::function<double(
 
 EngineController::~EngineController() { close(); }
 
-bool EngineController::wantsTap(const Config& c) { return c.aecEnabled && !c.globalBypass; }
+// Bypass keeps the tap: toggling it must be instant (applyFlags), not a rebuild.
+bool EngineController::wantsTap(const Config& c) { return c.aecEnabled; }
 
 void EngineController::setConfig(const Config& config) {
     const bool reshape = config.inputDeviceUid != config_.inputDeviceUid
                          || config.inputChannel != config_.inputChannel
                          || config.bufferSize != config_.bufferSize || wantsTap(config) != wantsTap(config_);
+    const bool flagsChanged =
+        config.aecEnabled != config_.aecEnabled || config.globalBypass != config_.globalBypass;
     config_ = config;
-    if (reshape) close();   // reopened by evaluate() if there is demand
+    if (reshape)
+        close();   // reopened by evaluate() if there is demand
+    else if (flagsChanged && ioOpen_)
+        backend_.applyFlags(config_.aecEnabled, config_.globalBypass);
     evaluate();
 }
 
@@ -49,7 +55,16 @@ void EngineController::onDefaultOutputChanged() {
 }
 
 void EngineController::onDeviceLost() {
+    const bool wasOpen = ioOpen_;
+    const double now = now_();
     close();
+    // Lost again right after opening: do not rebuild in a tight loop, let tick() retry later.
+    if (wasOpen && demand_ && now - lastOpened_ < kLostAfterOpenSeconds && blockedState() == EngineState::Idle) {
+        lastError_ = "the audio device was lost again right after starting; retrying";
+        lastAttempt_ = now;
+        setState(EngineState::Error);
+        return;
+    }
     evaluate();
 }
 
@@ -64,8 +79,8 @@ void EngineController::tick() {
     if (ioOpen_ && !demand_ && now - demandOffSince_ >= kStopGraceSeconds) {
         close();
         evaluate();
-    } else if (state_ == EngineState::Error && demand_ && now - lastAttempt_ >= kRetrySeconds) {
-        evaluate();
+    } else if (state_ == EngineState::Error && (!demand_ || now - lastAttempt_ >= kRetrySeconds)) {
+        evaluate();   // without demand: Idle
     }
 }
 
@@ -73,15 +88,16 @@ EngineState EngineController::state() const { return state_; }
 juce::String EngineController::lastError() const { return lastError_; }
 bool EngineController::ioOpen() const { return ioOpen_; }
 
-void EngineController::evaluate() {
-    EngineState blocked = EngineState::Idle;
-    if (!backend_.driverInstalled())
-        blocked = EngineState::DriverMissing;
-    else if (config_.inputDeviceUid.isEmpty() || !backend_.micAvailable(config_.inputDeviceUid))
-        blocked = EngineState::MicMissing;
-    else if (!backend_.micSupports48k(config_.inputDeviceUid))
-        blocked = EngineState::UnsupportedSampleRate;
+EngineState EngineController::blockedState() {
+    if (!backend_.driverInstalled()) return EngineState::DriverMissing;
+    if (config_.inputDeviceUid.isEmpty() || !backend_.micAvailable(config_.inputDeviceUid))
+        return EngineState::MicMissing;
+    if (!backend_.micSupports48k(config_.inputDeviceUid)) return EngineState::UnsupportedSampleRate;
+    return EngineState::Idle;
+}
 
+void EngineController::evaluate() {
+    const EngineState blocked = blockedState();
     if (blocked != EngineState::Idle) {
         close();
         lastError_.clear();
@@ -93,7 +109,7 @@ void EngineController::evaluate() {
         return;
     }
     if (!demand_) {
-        lastError_.clear();
+        if (state_ != EngineState::Error) lastError_.clear();   // keep why the last open failed
         setState(EngineState::Idle);
         return;
     }
@@ -109,11 +125,13 @@ void EngineController::open() {
     if (backend_.openIO(withTap, error)) {
         ioOpen_ = true;
         ioWithTap_ = withTap;
+        lastOpened_ = lastAttempt_;
         lastError_.clear();
         setState(EngineState::Running);
     } else {
         lastError_ = error.isNotEmpty() ? error : juce::String("could not open the audio IO");
-        setState(EngineState::Error);
+        // Nobody needs the IO (e.g. a rebuild during the grace period): nothing to retry.
+        setState(demand_ ? EngineState::Error : EngineState::Idle);
     }
 }
 

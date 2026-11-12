@@ -202,6 +202,56 @@ TEST_CASE("MacEngineBackend opens and closes the IO and keeps the plugins", "[ba
     REQUIRE(fixomic::test::TestPlugin::liveInstances.load() >= 1);
 }
 
+TEST_CASE("MacEngineBackend prepares the plugins again only when the buffer size changes", "[backend][hardware]")
+{
+    using fixomic::test::TestPlugin;
+    Engine e;
+    e.config.aecEnabled = false;
+    e.chain.prepare(48000.0, 128);
+    e.chain.add(std::make_unique<TestPlugin>("counted", 1.0f));
+    juce::String error;
+
+    const int before = TestPlugin::prepareCalls.load();
+    REQUIRE(e.backend.openIO(false, error));   // first open: prepares
+    const int afterFirst = TestPlugin::prepareCalls.load();
+    REQUIRE(afterFirst > before);
+    e.backend.closeIO();
+    REQUIRE(e.backend.openIO(false, error));   // same buffer: no prepareToPlay
+    e.backend.closeIO();
+    REQUIRE(TestPlugin::prepareCalls.load() == afterFirst);
+
+    e.config.bufferSize = 256;                 // new buffer: prepared again
+    REQUIRE(e.backend.openIO(false, error));
+    INFO(error.toStdString());
+    REQUIRE(TestPlugin::prepareCalls.load() > afterFirst);
+    pumpMainLoop(0.5, [&] { return e.backend.io()->stats().callbacks > 20; });
+    REQUIRE(e.backend.io()->stats().callbacks > 20);
+    e.backend.closeIO();
+}
+
+TEST_CASE("MacEngineBackend applyFlags switches bypass on the open IO", "[backend][hardware]")
+{
+    Engine e;
+    juce::String error;
+    REQUIRE(e.backend.openIO(true, error));
+    INFO(error.toStdString());
+    REQUIRE(e.backend.tapActive());
+    pumpMainLoop(1.0, [&] { return e.graph.aecActive(); });
+    REQUIRE(e.graph.aecActive());
+    const auto* io = e.backend.io();
+
+    e.backend.applyFlags(true, true);   // bypass: AEC skipped, same IO and tap
+    pumpMainLoop(1.0, [&] { return !e.graph.aecActive(); });
+    REQUIRE_FALSE(e.graph.aecActive());
+    REQUIRE(e.backend.io() == io);
+    REQUIRE(e.backend.tapActive());
+
+    e.backend.applyFlags(true, false);
+    pumpMainLoop(1.0, [&] { return e.graph.aecActive(); });
+    REQUIRE(e.graph.aecActive());
+    e.backend.closeIO();
+}
+
 TEST_CASE("MacEngineBackend with a tap runs the AEC", "[backend][hardware]")
 {
     Engine e;
