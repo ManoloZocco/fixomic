@@ -55,6 +55,10 @@ std::optional<int> moveTarget(int from, int gap, int count);
 
 inline constexpr double kChainSampleRate = 48000.0;   // the engine's only rate
 
+// The chain's latency: the sum over the slots that process (neither missing nor bypassed), as
+// PluginChain::totalLatencySamples() counts it.
+int chainLatencySamples(const std::vector<PluginChain::SlotInfo>&);
+
 // A plugin's latency, "1,0 ms": "" when it reports none (0 or less); "< 0,1 ms" when it would
 // round to zero.
 juce::String formatSlotLatency(int latencySamples, double sampleRate = kChainSampleRate);

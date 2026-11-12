@@ -25,7 +25,8 @@ constexpr int kAutoRepeatMs = 40;               // mouseDrag while still, for th
 
 // One slot. Paints the handle, the name and the secondary text; the switch and the remove button
 // are its children. Presses outside them start a drag (reported to the list) or, released on the
-// name without dragging, open the editor.
+// name without dragging, open the editor. A press whose drag was cancelled (Escape, a chain change)
+// does nothing more until the button is released: the row may show another slot by then.
 class ChainList::Row : public juce::Component {
 public:
     explicit Row(ChainList& owner) : owner_(owner), remove_(GlyphButton::Glyph::Remove) {
@@ -47,9 +48,17 @@ public:
         setTitle(slot.name);
         setDescription(detail_);
         hover_ = Zone::None;
-        dragging_ = false;
         updateCursor();
         resized();
+        repaint();
+    }
+
+    // The list stopped this row's drag: the rest of the press is ignored.
+    void cancelPress() {
+        dragging_ = false;
+        pressed_ = false;
+        pressCancelled_ = true;
+        updateCursor();
         repaint();
     }
 
@@ -95,12 +104,13 @@ public:
 
     void mouseDown(const juce::MouseEvent&) override {
         pressed_ = true;
+        pressCancelled_ = false;
         repaint();
     }
 
     void mouseDrag(const juce::MouseEvent& e) override {
         if (!dragging_) {
-            if (e.getDistanceFromDragStart() < kDragThreshold) return;
+            if (pressCancelled_ || e.getDistanceFromDragStart() < kDragThreshold) return;
             dragging_ = owner_.beginDrag(index_);
             if (!dragging_) return;
             pressed_ = false;
@@ -118,6 +128,7 @@ public:
             return;
         }
         repaint();
+        if (pressCancelled_) return;
         if (!e.mouseWasDraggedSinceMouseDown() && zoneAt(e.position) == Zone::Name && !slot_.missing)
             owner_.openEditorClicked(index_);
     }
@@ -190,6 +201,7 @@ private:
     Zone hover_ = Zone::None;
     bool pressed_ = false;
     bool dragging_ = false;
+    bool pressCancelled_ = false;   // its drag was cancelled: ignore the rest of this press
 };
 
 // ---- ChainList --------------------------------------------------------------------------------
@@ -210,14 +222,14 @@ ChainList::ChainList() {
     fitHeight();
 }
 
-ChainList::~ChainList() { cancelDrag(); }
+ChainList::~ChainList() { stopDrag(); }
 
 void ChainList::setSlots(std::vector<PluginChain::SlotInfo> slots) {
     // After an edit the rows are refilled even if the chain did not change (an edit that did
     // nothing): a switch flipped by the click goes back to the slot's state.
     const bool afterEdit = std::exchange(awaitingSlots_, false);
     if (slots == slots_ && !afterEdit) return;
-    cancelDrag();   // the indices it was about may be gone
+    stopDrag();   // the indices it was about may be gone
     slots_ = std::move(slots);
     // Rows are kept and refilled by index: only the surplus is destroyed.
     while (rows_.size() > slots_.size()) rows_.pop_back();
@@ -291,7 +303,13 @@ std::optional<int> ChainList::draggedRow() const {
 }
 
 std::optional<int> ChainList::dropGap() const {
-    return dragFrom_ >= 0 ? std::optional<int>(dragGap_) : std::nullopt;
+    return dragFrom_ >= 0 && dragGap_ >= 0 ? std::optional<int>(dragGap_) : std::nullopt;
+}
+
+bool ChainList::inDropZone(juce::Point<float> position) const {
+    // The list, widened to the panel's edges and by a row above and below it.
+    const auto zone = getLocalBounds().toFloat().expanded(static_cast<float>(kInset), static_cast<float>(kRowHeight));
+    return zone.contains(position);
 }
 
 bool ChainList::beginDrag(int index) {
@@ -306,7 +324,9 @@ bool ChainList::beginDrag(int index) {
 
 void ChainList::dragMoved(juce::Point<float> position) {
     if (dragFrom_ < 0) return;
-    const int gap = insertionGap(position.y, static_cast<float>(kRowHeight), static_cast<int>(slots_.size()));
+    const int gap = inDropZone(position)
+                        ? insertionGap(position.y, static_cast<float>(kRowHeight), static_cast<int>(slots_.size()))
+                        : -1;   // released here, the drag is cancelled: no drop line
     if (gap != dragGap_) {
         dragGap_ = gap;
         repaint();
@@ -320,17 +340,29 @@ void ChainList::dragMoved(juce::Point<float> position) {
 void ChainList::endDrag(juce::Point<float> position) {
     if (dragFrom_ < 0) return;
     const int from = dragFrom_;
-    const int gap = insertionGap(position.y, static_cast<float>(kRowHeight), static_cast<int>(slots_.size()));
-    const auto to = moveTarget(from, gap, static_cast<int>(slots_.size()));
-    cancelDrag();
+    const int count = static_cast<int>(slots_.size());
+    const auto to = inDropZone(position)
+                        ? moveTarget(from, insertionGap(position.y, static_cast<float>(kRowHeight), count), count)
+                        : std::nullopt;   // released away from the list: cancelled
+    stopDrag();
     if (!to) return;
     awaitingSlots_ = true;
     if (onMove) onMove(from, *to);
 }
 
-void ChainList::cancelDrag() {
+bool ChainList::cancelDrag() {
+    if (dragFrom_ < 0) return false;
+    stopDrag();
+    return true;
+}
+
+void ChainList::stopDrag() {
     if (dragFrom_ < 0) return;
-    if (auto* dragged = row(dragFrom_)) dragged->setAlpha(1.0f);
+    if (dragFrom_ < static_cast<int>(rows_.size())) {
+        auto& dragged = *rows_[static_cast<size_t>(dragFrom_)];
+        dragged.setAlpha(1.0f);
+        dragged.cancelPress();
+    }
     dragFrom_ = dragGap_ = -1;
     juce::Desktop::getInstance().beginDragAutoRepeat(0);
     repaint();

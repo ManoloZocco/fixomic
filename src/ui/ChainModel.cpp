@@ -98,6 +98,13 @@ std::optional<int> moveTarget(int from, int gap, int count) {
 
 // ---- chain rows ---------------------------------------------------------------------------------
 
+int chainLatencySamples(const std::vector<PluginChain::SlotInfo>& slots) {
+    int total = 0;
+    for (const auto& slot : slots)
+        if (!slot.missing && !slot.bypassed) total += slot.latencySamples;
+    return total;
+}
+
 juce::String formatSlotLatency(int latencySamples, double sampleRate) {
     if (latencySamples <= 0 || !(sampleRate > 0.0)) return {};
     const double ms = static_cast<double>(latencySamples) / sampleRate * 1000.0;

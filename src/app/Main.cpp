@@ -6,6 +6,7 @@
 #include "app/AppController.h"
 #include "platform/mac/StatusItem.h"
 #include "plugins/PluginCatalog.h"
+#include "ui/ChainModel.h"
 #include "ui/MainPanel.h"
 #include "ui/Snapshot.h"
 #include "ui/Theme.h"
@@ -38,7 +39,8 @@
 //                               state (panel-*.png), the four icons (tray-*.png), and the panel with
 //                               demo chain data, never the user's: a chain of four plugins, one
 //                               bypassed and one missing (chain-*.png), no plugins (chain-empty-*.png),
-//                               the plugin picker with a search typed (picker-*.png). A relative <dir>
+//                               the plugin picker with a search typed (picker-*.png); their latency row
+//                               counts the demo chain's plugins. A relative <dir>
 //                               is resolved against the running instance's working directory (/ when
 //                               launched with `open`): pass an absolute one
 
@@ -56,6 +58,11 @@ void log(const juce::String& text) {
     std::fprintf(stderr, "fixomic: [%.3f] %s\n", static_cast<double>(juce::Time::currentTimeMillis()) / 1000.0,
                  text.toRawUTF8());
 }
+
+// juce::Logger messages (e.g. why a plugin could not be loaded) in the same log, same format.
+struct AppLogger final : juce::Logger {
+    void logMessage(const juce::String& message) override { log(message); }
+};
 
 #if FIXOMIC_DEV_COMMANDS
 
@@ -128,6 +135,14 @@ std::vector<juce::PluginDescription> demoEffects() {
     return effects;
 }
 
+// The latency of `chain` with the app's buffer, AEC and devices: the latency row of a demo panel
+// agrees with the chain it shows.
+fixomic::LatencyBreakdown demoLatency(AppController& app, const std::vector<fixomic::PluginChain::SlotInfo>& chain) {
+    auto latency = app.latency();
+    latency.pluginFrames = app.config().globalBypass ? 0 : ui::chainLatencySamples(chain);
+    return latency;
+}
+
 // Renders the UI: the panel with the current state, the icons, and the chain section with demo data.
 void writeSnapshots(AppController& app, const ui::TrayIcon& tray, const juce::String& path) {
     const auto directory = juce::File::getCurrentWorkingDirectory().getChildFile(path);
@@ -139,9 +154,10 @@ void writeSnapshots(AppController& app, const ui::TrayIcon& tray, const juce::St
         p->refresh(tray.status());
         fit(*p);
     }
-    chain.chainList().setSlots(demoChain());
-    emptyChain.chainList().setSlots({});
+    chain.showChain(demoChain(), demoLatency(app, demoChain()));
+    emptyChain.showChain({}, demoLatency(app, {}));
     picker.showPicker();
+    picker.showChain(demoChain(), demoLatency(app, demoChain()));   // the chain the picker adds to
     picker.picker().setEffects(demoEffects());
     picker.picker().setScanning(false);
     picker.picker().setSearchText("eq");
@@ -276,6 +292,7 @@ public:
             if (scanWorker_ == nullptr) quit();
             return;
         }
+        juce::Logger::setCurrentLogger(&logger_);
         theme_ = std::make_unique<ui::Theme>();   // follows the system appearance
         juce::LookAndFeel::setDefaultLookAndFeel(theme_.get());
 
@@ -313,6 +330,7 @@ public:
         app_.reset();   // saves the config, closes the IO, unloads the plugins
         juce::LookAndFeel::setDefaultLookAndFeel(nullptr);
         theme_.reset();
+        juce::Logger::setCurrentLogger(nullptr);
         scanWorker_.reset();
     }
 
@@ -326,6 +344,7 @@ private:
             + (lastState_ == EngineState::Error ? ": " + app_->lastError() : juce::String()));
     }
 
+    AppLogger logger_;
     std::unique_ptr<fixomic::PluginScanWorker> scanWorker_;
     std::unique_ptr<ui::Theme> theme_;
     std::unique_ptr<AppController> app_;

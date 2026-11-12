@@ -57,6 +57,9 @@ public:
     // The chain section's views. The snapshot command fills them with demo data.
     ChainList& chainList();
     PluginPicker& picker();
+    // Shows `slots` in the chain list and the route, and `latency` in the latency row, instead of
+    // the AppController's (the snapshot command's demo chain); the next refresh() shows the app's.
+    void showChain(std::vector<PluginChain::SlotInfo> slots, const LatencyBreakdown& latency);
 
     std::function<void()> onOpenSettings;           // 10c; until then the button does nothing visible
     std::function<void()> onQuit;
@@ -75,6 +78,8 @@ private:
     void refreshChain();       // the chain (and the catalog, while picking) from the AppController
     void refreshChainSoon();   // the same, once the current event handler has returned
     void scrollIntoView(const juce::Component&);
+    void updateRoute();                          // from status_ and the chain list's slots
+    void showLatency(const LatencyBreakdown&);
 
     AppController& app_;
     StatusPresentation status_;
@@ -120,8 +125,9 @@ juce::Rectangle<int> panelWindowBounds(std::optional<juce::Rectangle<int>> ancho
                                        juce::Rectangle<int> userArea, int width, int preferredHeight);
 
 // The borderless, rounded, shadowed window the panel lives in, under the menu-bar icon, like the
-// system's menu-bar extras: it hides itself on Esc (the first Esc closes the plugin picker, if
-// open) and when it stops being the active window (a click elsewhere); it reopens on the chain list.
+// system's menu-bar extras: it hides itself on Esc (an Esc first cancels a drag in the chain list,
+// then closes the plugin picker, if either is going on) and when it stops being the active window
+// (a click elsewhere); it reopens on the chain list.
 // Never taller than the display (panelWindowBounds): a longer panel (a long chain) scrolls.
 class MainPanelWindow : public juce::TopLevelWindow {
 public:

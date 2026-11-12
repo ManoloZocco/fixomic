@@ -241,6 +241,7 @@ add_executable(fixomic_tests
     tests/UiModelTests.cpp
     tests/ChainModelTests.cpp
     tests/ChainViewTests.cpp
+    tests/MainPanelTests.cpp
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)

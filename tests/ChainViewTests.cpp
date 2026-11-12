@@ -38,6 +38,17 @@ void dragRow(ChainList& list, int index, float x, float toY) {
     row.mouseUp(mouseAt(row, to, down, true));
 }
 
+// Press on row `index`, drag to `to` (in the list), release there.
+void dragRowTo(ChainList& list, int index, juce::Point<float> to) {
+    auto& row = *list.row(index);
+    const juce::Point<float> down{30.0f, ChainList::kRowHeight / 2.0f};
+    const auto inRow = to - row.getPosition().toFloat();
+    row.mouseDown(mouseAt(row, down, down, false));
+    row.mouseDrag(mouseAt(row, {down.x, down.y + 6.0f}, down, true));
+    row.mouseDrag(mouseAt(row, inRow, down, true));
+    row.mouseUp(mouseAt(row, inRow, down, true));
+}
+
 void clickRow(ChainList& list, int index, float x) {
     auto& row = *list.row(index);
     const juce::Point<float> at{x, ChainList::kRowHeight / 2.0f};
@@ -143,12 +154,57 @@ TEST_CASE("ChainList turns a drop into movePlugin(from, to)", "[ui][chainview]")
         REQUIRE(list.draggedRow() == 0);
         REQUIRE(list.dropGap() == 2);
         REQUIRE(row.getAlpha() < 1.0f);
-        // A chain change mid-drag cancels it.
+        // A chain change mid-drag cancels it, for the rest of this press: the row may now show
+        // another slot, so moving on does not start a new drag.
         auto changed = threeSlots();
-        changed[0].latencySamples = 96;
+        std::swap(changed[0], changed[1]);
         list.setSlots(changed);
         REQUIRE_FALSE(list.draggedRow().has_value());
         REQUIRE(row.getAlpha() == 1.0f);
+        row.mouseDrag(mouseAt(row, {30.0f, 80.0f}, down, true));
+        REQUIRE_FALSE(list.draggedRow().has_value());
+        row.mouseUp(mouseAt(row, {30.0f, 90.0f}, down, true));
+        REQUIRE(recorder.moves.empty());
+        REQUIRE(recorder.editors.empty());
+
+        // The next press drags again.
+        dragRow(list, 0, 30.0f, 3.0f * ChainList::kRowHeight - 4.0f);
+        REQUIRE(recorder.moves == std::vector<std::pair<int, int>>{{0, 2}});
+    }
+    SECTION("released away from the list: cancelled, nothing moves") {
+        const float rows = 3.0f * ChainList::kRowHeight;
+        const float listHeight = static_cast<float>(list.getHeight());
+        dragRowTo(list, 2, {100.0f, -ChainList::kRowHeight - 2.0f});   // more than a row above
+        dragRowTo(list, 0, {100.0f, listHeight + ChainList::kRowHeight + 2.0f});   // more than a row below
+        dragRowTo(list, 0, {-12.0f, rows - 4.0f});                       // past the panel's left edge
+        dragRowTo(list, 0, {kListWidth + 12.0f, rows - 4.0f});           // past its right edge
+        REQUIRE(recorder.moves.empty());
+    }
+    SECTION("away from the list the drop line goes; near it, the drop is clamped") {
+        auto& row = *list.row(2);
+        const juce::Point<float> down{30.0f, 16.0f};
+        row.mouseDown(mouseAt(row, down, down, false));
+        row.mouseDrag(mouseAt(row, {30.0f, 8.0f}, down, true));
+        const auto above = juce::Point<float>{100.0f, -ChainList::kRowHeight - 2.0f} - row.getPosition().toFloat();
+        row.mouseDrag(mouseAt(row, above, down, true));
+        REQUIRE(list.draggedRow() == 2);
+        REQUIRE_FALSE(list.dropGap().has_value());
+        const auto near = juce::Point<float>{100.0f, -10.0f} - row.getPosition().toFloat();   // within a row
+        row.mouseDrag(mouseAt(row, near, down, true));
+        REQUIRE(list.dropGap() == 0);
+        row.mouseUp(mouseAt(row, near, down, true));
+        REQUIRE(recorder.moves == std::vector<std::pair<int, int>>{{2, 0}});
+    }
+    SECTION("cancelDrag() stops a drag in progress and says whether there was one") {
+        REQUIRE_FALSE(list.cancelDrag());
+        auto& row = *list.row(0);
+        const juce::Point<float> down{30.0f, 16.0f};
+        row.mouseDown(mouseAt(row, down, down, false));
+        row.mouseDrag(mouseAt(row, {30.0f, 70.0f}, down, true));
+        REQUIRE(list.draggedRow() == 0);
+        REQUIRE(list.cancelDrag());
+        REQUIRE_FALSE(list.draggedRow().has_value());
+        row.mouseDrag(mouseAt(row, {30.0f, 90.0f}, down, true));
         row.mouseUp(mouseAt(row, {30.0f, 90.0f}, down, true));
         REQUIRE(recorder.moves.empty());
     }

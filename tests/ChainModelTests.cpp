@@ -179,3 +179,10 @@ TEST_CASE("slotDetail: missing, then bypassed, then latency", "[ui][chainmodel]"
     REQUIRE(slotDetail(PluginChain::SlotInfo{"Old EQ", false, true, 0}) == "Plugin non trovato");
     REQUIRE(slotDetail(PluginChain::SlotInfo{"Old EQ", true, true, 0}) == "Plugin non trovato");
 }
+
+TEST_CASE("chainLatencySamples sums the slots that process", "[ui][chainmodel]") {
+    REQUIRE(chainLatencySamples({}) == 0);
+    REQUIRE(chainLatencySamples({{"Gate", false, false, 48}, {"EQ", false, false, 64}}) == 112);
+    // Bypassed and missing slots add nothing, whatever they report.
+    REQUIRE(chainLatencySamples({{"Gate", false, false, 48}, {"EQ", true, false, 64}, {"Old", false, true, 32}}) == 48);
+}

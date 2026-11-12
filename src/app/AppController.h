@@ -64,6 +64,7 @@ public:
     struct Options {
         juce::File configFile = ConfigStore::defaultLocation();
         juce::File pluginCacheFile = PluginCatalog::defaultCacheLocation();
+        PluginCatalog::Options catalog;   // scan worker and locations (tests point them elsewhere)
     };
 
     AppController();
@@ -91,8 +92,11 @@ public:
     juce::String lastSaveError() const;  // Italian, "" after a successful save
 
     // ---- plugin chain ------------------------------------------------------------------------
-    // Instantiates and appends a plugin. Returns "" on success, else a readable (Italian) error.
+    // Instantiates and appends a plugin. Returns "" on success, else pluginLoadFailedText() of its
+    // name, for the UI; why it failed (the plugin format's message) is written to juce::Logger.
     juce::String addPlugin(const juce::PluginDescription&);
+    // "Impossibile caricare «Nectar 4 Gate»." ("… il plugin." without a name).
+    static juce::String pluginLoadFailedText(const juce::String& pluginName);
     void removePlugin(int index);              // closes its editor first
     void movePlugin(int from, int to);
     void setPluginBypassed(int index, bool);

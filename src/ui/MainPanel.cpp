@@ -133,12 +133,7 @@ void MainPanel::refresh(const StatusPresentation& status) {
     aecSwitch_.setToggleState(config.aecEnabled, juce::dontSendNotification);
 
     refreshChain();
-    const auto& slots = chainList_.slots();
-    const bool chainProcessing = std::any_of(slots.begin(), slots.end(), [](const PluginChain::SlotInfo& slot) {
-        return !slot.missing && !slot.bypassed;
-    });
-    const auto warningPane = app_.lastWarningPane();
-    route_.setRoute(routeFor(status, {config.aecEnabled, app_.lastWarning().isNotEmpty(), chainProcessing}));
+    updateRoute();
 
     inputMeter_.setInk(status.kind, running);
     outputMeter_.setInk(status.kind, running);
@@ -148,12 +143,9 @@ void MainPanel::refresh(const StatusPresentation& status) {
                                                                       &erleValue_, &chainTitle_, &chainList_, &picker_})
         dim(*c, bypassed);
 
-    const auto latency = app_.latency();
-    latencyLabel_.setText(running ? "Latenza" : "Latenza stimata");
-    latencyValue_.setText(formatLatencyTotal(latency));
-    latencyDetail_.setText(formatLatencyDetail(latency));
+    showLatency(app_.latency());
 
-    const auto notices = collectNotices(app_.lastWarning(), warningPane, app_.startupWarnings());
+    const auto notices = collectNotices(app_.lastWarning(), app_.lastWarningPane(), app_.startupWarnings());
     if (notices != notices_) rebuildNotices(notices);
 
     updateMeters();
@@ -193,6 +185,29 @@ void MainPanel::updateMeters() {
     erleValue_.setText(measuring ? formatErle(app_.erleDb()) : formatErle(std::numeric_limits<float>::quiet_NaN()));
 }
 
+void MainPanel::updateRoute() {
+    const auto& slots = chainList_.slots();
+    const bool chainProcessing = std::any_of(slots.begin(), slots.end(), [](const PluginChain::SlotInfo& slot) {
+        return !slot.missing && !slot.bypassed;
+    });
+    route_.setRoute(routeFor(status_, {app_.config().aecEnabled, app_.lastWarning().isNotEmpty(), chainProcessing}));
+}
+
+void MainPanel::showLatency(const LatencyBreakdown& latency) {
+    latencyLabel_.setText(app_.engineState() == EngineState::Running ? "Latenza" : "Latenza stimata");
+    latencyValue_.setText(formatLatencyTotal(latency));
+    latencyDetail_.setText(formatLatencyDetail(latency));
+}
+
+void MainPanel::showChain(std::vector<PluginChain::SlotInfo> slots, const LatencyBreakdown& latency) {
+    chainList_.setSlots(std::move(slots));
+    updateRoute();
+    showLatency(latency);
+    heightMayHaveChanged();
+    resized();
+    repaint();
+}
+
 void MainPanel::refreshChain() {
     chainList_.setSlots(app_.slots());
     if (pickerOpen_) {
@@ -225,6 +240,16 @@ void MainPanel::showPicker() {
 bool MainPanel::closePicker() {
     if (!pickerOpen_) return false;
     pickerOpen_ = false;
+    // The search field has the keyboard focus: hand it to the window first. Hidden with the focus,
+    // the picker would pass it to this panel, which gives it to its first focusable control, the
+    // global bypass switch, and Return (just pressed to add a plugin) would turn processing off.
+    if (picker_.hasKeyboardFocus(true)) {
+        auto* window = getTopLevelComponent();
+        if (window != this && window->getWantsKeyboardFocus())
+            window->grabKeyboardFocus();
+        else
+            picker_.giveAwayKeyboardFocus();
+    }
     picker_.setVisible(false);
     picker_.reset();
     chainTitle_.setVisible(true);
@@ -469,6 +494,7 @@ void MainPanelWindow::dismiss() {
     if (!isVisible()) return;
     panel_.setLive(false);
     setVisible(false);
+    panel_.chainList().cancelDrag();
     panel_.closePicker();   // it reopens on the chain
     dismissedAt_ = nowMs();
 }
@@ -477,7 +503,8 @@ bool MainPanelWindow::dismissedJustNow() const { return nowMs() - dismissedAt_ <
 
 bool MainPanelWindow::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress::escapeKey) {
-        if (!panel_.closePicker()) dismiss();
+        // One step back per Escape: a drag in progress, then the plugin picker, then the panel.
+        if (!panel_.chainList().cancelDrag() && !panel_.closePicker()) dismiss();
         return true;
     }
     return juce::TopLevelWindow::keyPressed(key);

@@ -23,7 +23,7 @@ AppController::AppController() : AppController(Options{}) {}
 AppController::AppController(Options options)
     : store_(options.configFile),
       config_(store_.load()),
-      catalog_(options.pluginCacheFile),
+      catalog_(options.pluginCacheFile, options.catalog),
       graph_(aec_, chain_),
       backend_(graph_, aec_, chain_, [this] { return config_; }),
       engine_(backend_, [] { return nowMs() / 1000.0; }),
@@ -200,9 +200,18 @@ juce::String AppController::lastSaveError() const { return lastSaveError_; }
 
 // ---- plugin chain -----------------------------------------------------------------------------
 
+juce::String AppController::pluginLoadFailedText(const juce::String& pluginName) {
+    if (pluginName.isEmpty()) return "Impossibile caricare il plugin.";
+    return juce::String::fromUTF8("Impossibile caricare \u00ab") + pluginName + juce::String::fromUTF8("\u00bb.");
+}
+
 juce::String AppController::addPlugin(const juce::PluginDescription& description) {
+    // The user reads one Italian sentence; why (the plugin format's own message, often English and
+    // technical) goes to the log.
     const auto failure = [&](const juce::String& why) {
-        return "Impossibile caricare il plugin \"" + description.name + "\": " + why;
+        juce::Logger::writeToLog("cannot load plugin \"" + description.name + "\" (" + description.pluginFormatName + " "
+                                 + description.fileOrIdentifier + "): " + why);
+        return pluginLoadFailedText(description.name);
     };
     juce::String error;
     auto instance = catalog_.factory()(description, kSampleRate, config_.bufferSize, error);

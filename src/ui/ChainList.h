@@ -26,7 +26,10 @@ namespace fixomic::ui {
 //
 // Drag to reorder: press on a row (outside its buttons) and drag. The row recedes, a line in the
 // text ink with a ring at the handle marks the gap it will drop into (no line where it would stay),
-// and an enclosing Viewport scrolls when the pointer nears its edges.
+// and an enclosing Viewport scrolls when the pointer nears its edges. Released away from the list
+// (more than a row above or below it, or past the panel's sides: no line there) the drag is
+// cancelled; so is it by cancelDrag() (Escape) and by a chain change. A cancelled press stays
+// cancelled until the button is released.
 //
 // Its bounds reach Theme::kFlatTextInset past the content edges on both sides, so the flat button's
 // text lines up with the panel's content; setSlots() sets its own height (heightForWidth()), and the
@@ -48,12 +51,15 @@ public:
     std::function<void(int index)> onRemove;
     std::function<void()> onAdd;                           // "+ Aggiungi plugin"
 
-    // The drag in progress: the dragged row and the gap (0..size) it points at; nullopt when none.
+    // The drag in progress: the dragged row and the gap (0..size) it points at; nullopt when none
+    // (the gap: also while the pointer is away from the list).
     std::optional<int> draggedRow() const;
     std::optional<int> dropGap() const;
     juce::Rectangle<int> rowBounds(int index) const;      // in this component
     juce::Component* row(int index) const;                 // for tests
     juce::Button& addButton();
+    // Stops the drag in progress (Escape); false when there is none.
+    bool cancelDrag();
 
     void resized() override;
     void paintOverChildren(juce::Graphics&) override;
@@ -65,7 +71,8 @@ private:
     bool beginDrag(int index);
     void dragMoved(juce::Point<float>);
     void endDrag(juce::Point<float>);
-    void cancelDrag();
+    void stopDrag();                                    // ends the drag (dropped or cancelled)
+    bool inDropZone(juce::Point<float>) const;          // a release here drops; elsewhere it cancels
     void bypassClicked(int index, bool bypassed);
     void removeClicked(int index);
     void openEditorClicked(int index);
