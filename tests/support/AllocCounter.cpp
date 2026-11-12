@@ -1,25 +1,27 @@
 #include "support/AllocCounter.h"
 
-#include <atomic>
 #include <cstddef>
 #include <cstdlib>
 #include <new>
 
 namespace {
-std::atomic<bool> gCountAllocations{false};
-std::atomic<int> gAllocations{0};
+// Armed only on the thread that called startCountingAllocations(). A trivial thread_local needs
+// no allocation or lock to read, so it is safe inside the replacement operator new. The count is
+// only ever touched by the armed thread.
+thread_local bool tCountAllocations = false;
+thread_local int tAllocations = 0;
 } // namespace
 
 namespace fixomic::test {
 
 void startCountingAllocations() noexcept {
-    gAllocations = 0;
-    gCountAllocations = true;
+    tAllocations = 0;
+    tCountAllocations = true;
 }
 
 int stopCountingAllocations() noexcept {
-    gCountAllocations = false;
-    return gAllocations.load();
+    tCountAllocations = false;
+    return tAllocations;
 }
 
 } // namespace fixomic::test
@@ -28,7 +30,7 @@ int stopCountingAllocations() noexcept {
 // translation unit. Only the plain forms are replaced: libc++'s nothrow forms forward to them,
 // over-aligned allocations are not counted.
 void* operator new(std::size_t size) {
-    if (gCountAllocations.load(std::memory_order_relaxed)) gAllocations.fetch_add(1, std::memory_order_relaxed);
+    if (tCountAllocations) ++tAllocations;
     if (void* p = std::malloc(size ? size : 1)) return p;
     throw std::bad_alloc();
 }
