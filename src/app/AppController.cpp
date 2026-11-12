@@ -1,5 +1,8 @@
 #include "app/AppController.h"
 
+#include "platform/mac/DriverInstaller.h"
+#include "platform/mac/LoginItem.h"
+
 #include <stdexcept>
 
 namespace fixomic {
@@ -59,12 +62,24 @@ AppController::AppController(Options options)
             c.notify();
         });
     };
+    // The system audio prompt raised by openIO() was answered: retry at once.
+    backend_.onSystemAudioPermission = [this] {
+        post([](AppController& c) {
+            c.engine_.onMicListChanged();
+            c.notify();
+        });
+    };
     engine_.onStateChanged = [this](EngineState state) {
         post([state](AppController& c) {
             if (state == EngineState::Starting) c.lastWarning_.clear();   // a fresh open reports anew
             c.notify();
         });
     };
+
+    if (config_.launchAtLogin && !mac::launchAtLoginEnabled() && !mac::launchAtLoginRequiresApproval()) {
+        juce::String error;
+        if (!mac::setLaunchAtLogin(true, error)) startupWarnings_.push_back(error);
+    }
 
     engine_.setConfig(config_);
     demand_.start();
@@ -227,5 +242,50 @@ LatencyBreakdown AppController::latency() const {
 }
 
 std::vector<mac::AudioDeviceInfo> AppController::inputDevices() const { return mac::listInputDevices(); }
+
+// ---- platform services ------------------------------------------------------------------------
+
+mac::Permission AppController::microphonePermission() const { return mac::microphonePermission(); }
+mac::Permission AppController::systemAudioPermission() const { return mac::systemAudioPermission(); }
+bool AppController::driverInstalled() const { return mac::driverInstalled(); }
+juce::String AppController::bundledDriverVersion() const { return mac::bundledDriverVersion(); }
+juce::String AppController::installedDriverVersion() const { return mac::installedDriverVersion(); }
+
+bool AppController::driverUpdateAvailable() const {
+    return mac::isDriverUpdate(bundledDriverVersion(), installedDriverVersion());
+}
+
+bool AppController::driverOperationInProgress() const { return mac::driverOperationInProgress(); }
+
+void AppController::installDriver(DriverCompletion done) {
+    // mac:: completions already run on the main queue; the weak reference keeps them out after
+    // destruction.
+    mac::installDriverAsync([weak = juce::WeakReference<AppController>(this), done](bool ok, juce::String error) {
+        if (auto* self = weak.get()) self->driverOperationDone(ok, error, done);
+    });
+}
+
+void AppController::uninstallDriver(DriverCompletion done) {
+    mac::uninstallDriverAsync([weak = juce::WeakReference<AppController>(this), done](bool ok, juce::String error) {
+        if (auto* self = weak.get()) self->driverOperationDone(ok, error, done);
+    });
+}
+
+void AppController::driverOperationDone(bool ok, const juce::String& error, const DriverCompletion& done) {
+    engine_.onMicListChanged();   // DriverMissing <-> Idle / Running
+    if (done) done(ok, error);
+    notify();
+}
+
+bool AppController::launchAtLogin() const { return mac::launchAtLoginEnabled(); }
+
+bool AppController::setLaunchAtLogin(bool enabled, juce::String& error) {
+    if (!mac::setLaunchAtLogin(enabled, error)) return false;
+    if (config_.launchAtLogin != enabled)
+        updateConfig([enabled](Config& c) { c.launchAtLogin = enabled; });
+    else
+        notify();
+    return true;
+}
 
 } // namespace fixomic

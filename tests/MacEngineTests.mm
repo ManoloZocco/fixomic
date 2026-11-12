@@ -76,7 +76,10 @@ struct Engine {
     fixomic::PluginChain chain;
     fixomic::ProcessingGraph graph{aec, chain};
     fixomic::Config config;
-    mac::MacEngineBackend backend{graph, aec, chain, [this] { return config; }};
+    // System audio reported as granted: these tests exercise the tap itself (from a terminal the
+    // TCC preflight answers for the terminal, "not determined", and the tap works anyway).
+    mac::MacEngineBackend backend{graph, aec, chain, [this] { return config; }, {},
+                                  {[] { return mac::Permission::Granted; }, nullptr, nullptr}};
 
     Engine()
     {
@@ -350,4 +353,72 @@ TEST_CASE("MacEngineBackend asks for the microphone before touching the HAL", "[
     status = mac::Permission::Granted;   // now the HAL is reached
     REQUIRE_FALSE(backend.openIO(false, error));
     REQUIRE(error.contains("not found"));
+}
+
+TEST_CASE("MacEngineBackend asks for the system audio permission off the main thread", "[backend][permissions]")
+{
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph{aec, chain};
+    fixomic::Config config;
+    config.inputDeviceUid = "no-such-mic-uid";   // fails with "not found" once the aggregate is attempted
+
+    mac::Permission status = mac::Permission::NotDetermined;
+    int requests = 0;
+    std::function<void()> pendingCompletion;
+    mac::SystemAudioAccess audio{
+        [&] { return status; },
+        [&](std::function<void()> done) {
+            ++requests;
+            pendingCompletion = std::move(done);
+        },
+        [] { return false; }};
+    mac::MacEngineBackend::MicrophoneAccess mic{[] { return mac::Permission::Granted; }, nullptr};
+    mac::MacEngineBackend backend{graph, aec, chain, [&] { return config; }, mic, audio};
+    int answers = 0;
+    std::vector<juce::String> warnings;
+    backend.onSystemAudioPermission = [&] { ++answers; };
+    backend.onWarning = [&](juce::String w) { warnings.push_back(w); };
+
+    juce::String error;
+    SECTION("not determined: one prompt, then the tap is created as usual")
+    {
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error == "In attesa del permesso per l'audio di sistema");
+        REQUIRE(requests == 1);
+        REQUIRE_FALSE(backend.openIO(true, error));   // retries while pending do not ask again
+        REQUIRE(requests == 1);
+
+        // Without a tap there is nothing to ask.
+        REQUIRE_FALSE(backend.openIO(false, error));
+        REQUIRE(error.contains("not found"));
+
+        REQUIRE(pendingCompletion);
+        pendingCompletion();
+        REQUIRE(answers == 1);
+
+        // Still "not determined" (the preflight is stale after the prompt): proceeds anyway.
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error.contains("not found"));
+        REQUIRE(requests == 1);
+        REQUIRE(warnings.empty());
+    }
+    SECTION("denied: opens without the tap and warns")
+    {
+        status = mac::Permission::Denied;
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error.contains("not found"));
+        REQUIRE(requests == 0);
+        REQUIRE(warnings.size() == 1);
+        REQUIRE(warnings[0].startsWith("Permesso audio di sistema negato"));
+        REQUIRE(warnings[0].contains("Registrazione schermo e audio di sistema"));
+    }
+    SECTION("granted: no prompt, no warning")
+    {
+        status = mac::Permission::Granted;
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(error.contains("not found"));
+        REQUIRE(requests == 0);
+        REQUIRE(warnings.empty());
+    }
 }

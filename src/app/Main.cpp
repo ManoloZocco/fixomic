@@ -22,6 +22,10 @@
 //   --set-param <i> <p> <v>     sets parameter p (0..1) of slot i, as if moved in its editor
 //   --get-param <i> <p>         prints it
 //   --rescan                    incremental plugin scan
+//   --platform-status           permissions, driver (installed / versions), launch at login
+//   --install-driver            installs the bundled driver (administrator dialog), result logged
+//   --uninstall-driver          removes the installed driver (administrator dialog), result logged
+//   --launch-at-login <0|1>     registers / unregisters the login item
 
 namespace {
 
@@ -59,6 +63,25 @@ void printStatus(AppController& app) {
         log("  slot " + juce::String(static_cast<int>(i)) + ": " + slots[i].name + (slots[i].missing ? " [missing]" : "")
             + (slots[i].bypassed ? " [bypassed]" : "") + ", latency " + juce::String(slots[i].latencySamples));
     for (const auto& warning : app.startupWarnings()) log("  startup warning: " + warning);
+}
+
+const char* permissionText(fixomic::mac::Permission permission) {
+    switch (permission) {
+    case fixomic::mac::Permission::Granted: return "granted";
+    case fixomic::mac::Permission::Denied: return "denied";
+    case fixomic::mac::Permission::NotDetermined: return "not determined";
+    }
+    return "?";
+}
+
+void printPlatformStatus(AppController& app) {
+    log(juce::String("microphone ") + permissionText(app.microphonePermission()) + ", system audio "
+        + permissionText(app.systemAudioPermission()) + ", driver "
+        + (app.driverInstalled() ? "installed" : "not installed") + " (installed '" + app.installedDriverVersion()
+        + "', bundled '" + app.bundledDriverVersion() + "'" + (app.driverUpdateAvailable() ? ", update available" : "")
+        + (app.driverOperationInProgress() ? ", operation in progress" : "") + "), launch at login "
+        + (app.launchAtLogin() ? "enabled" : "not enabled") + " (config " + (app.config().launchAtLogin ? "on" : "off")
+        + ")");
 }
 
 // Applies the options in `commandLine`; returns false if one was not understood.
@@ -115,6 +138,28 @@ bool runCommands(AppController& app, const juce::String& commandLine) {
                     + parameter->getCurrentValueAsText() + ")");
         } else if (arg == "--rescan") {
             app.scanPlugins();
+        } else if (arg == "--platform-status") {
+            printPlatformStatus(app);
+        } else if (arg == "--install-driver" || arg == "--uninstall-driver") {
+            const bool install = arg == "--install-driver";
+            const double start = juce::Time::getMillisecondCounterHiRes();
+            auto done = [install, start](bool ok, juce::String error) {
+                log(juce::String(install ? "install-driver" : "uninstall-driver") + (ok ? " ok" : " failed: " + error)
+                    + " (" + juce::String((juce::Time::getMillisecondCounterHiRes() - start) / 1000.0, 1) + " s)");
+            };
+            log(juce::String(install ? "installing" : "uninstalling") + " the driver...");
+            if (install)
+                app.installDriver(done);
+            else
+                app.uninstallDriver(done);
+        } else if (arg == "--launch-at-login" && i + 1 < args.size()) {
+            juce::String error;
+            const bool enable = intArg(++i) != 0;
+            if (app.setLaunchAtLogin(enable, error))
+                log(juce::String("launch at login ") + (enable ? "on" : "off") + ", system state "
+                    + (app.launchAtLogin() ? "enabled" : "not enabled"));
+            else
+                log("launch at login: " + error);
         } else {
             log("unknown option " + arg);
             return false;

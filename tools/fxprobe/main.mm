@@ -1144,6 +1144,15 @@ int cmdEngineTest(const EngineTestOptions& o)
         std::printf("%8.3f s  device lost\n", elapsed());
         engine.onDeviceLost();
     };
+    // The system audio prompt (raised off the main thread by the first open with a tap) returned:
+    // retry at once, deferred (the backend may be inside openIO).
+    EngineController* engineForPermission = &engine;
+    backend.onSystemAudioPermission = [engineForPermission, elapsed] {
+        std::printf("%8.3f s  system audio permission prompt done\n", elapsed());
+        dispatch_async(dispatch_get_main_queue(), ^{
+            engineForPermission->onMicListChanged();
+        });
+    };
     mac::DemandMonitor demand([&](bool inUse) {
         std::printf("%8.3f s (%.3f)  DemandMonitor inUse=%d\n", elapsed(), epochSeconds(), inUse ? 1 : 0);
         engine.onDemandChanged(inUse);

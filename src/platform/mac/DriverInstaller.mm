@@ -1,0 +1,249 @@
+#include "platform/mac/DriverInstaller.h"
+
+#include "platform/mac/CoreAudioDevices.h"
+#include "platform/mac/FixomicDevices.h"
+
+#import <Foundation/Foundation.h>
+
+#include <atomic>
+#include <chrono>
+#include <thread>
+
+namespace fixomic::mac {
+
+namespace {
+
+std::atomic<bool> operationRunning{false};
+
+// Italian text with non-ASCII characters (juce::String(const char*) expects ASCII).
+juce::String text(const char* utf8)
+{
+    return juce::String::fromUTF8(utf8);
+}
+
+juce::String toJuce(NSString* string)
+{
+    return string != nil ? juce::String::fromUTF8(string.UTF8String) : juce::String();
+}
+
+NSString* toNs(const juce::String& string)
+{
+    return [NSString stringWithUTF8String:string.toRawUTF8()];
+}
+
+juce::String plistValue(const juce::File& bundle, NSString* key)
+{
+    @autoreleasepool {
+        const auto plist = bundle.getChildFile("Contents/Info.plist");
+        NSDictionary* info = [NSDictionary dictionaryWithContentsOfURL:[NSURL fileURLWithPath:toNs(plist.getFullPathName())]
+                                                                 error:nil];
+        id value = info[key];
+        return [value isKindOfClass:[NSString class]] ? toJuce(value) : juce::String();
+    }
+}
+
+bool micPresent()
+{
+    return findDeviceByUid(devices::kMicUid).has_value();
+}
+
+// Polls (background thread) until fixomic Mic is present == `present`, up to kDriverWaitSeconds.
+bool waitForMic(bool present)
+{
+    const auto end = std::chrono::steady_clock::now() + std::chrono::duration<double>(kDriverWaitSeconds);
+    while (micPresent() != present) {
+        if (std::chrono::steady_clock::now() >= end)
+            return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+    }
+    return true;
+}
+
+void finish(const DriverCompletion& completion, bool ok, const juce::String& error)
+{
+    operationRunning = false;
+    dispatch_async(dispatch_get_main_queue(), ^{
+        if (completion)
+            completion(ok, error);
+    });
+}
+
+// Runs `work` (returns the error, "" on success) on a background queue, one operation at a time.
+void runOperation(DriverCompletion completion, std::function<juce::String()> work)
+{
+    if (operationRunning.exchange(true)) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion)
+                completion(false, text("Un'altra operazione sul driver \u00e8 in corso"));
+        });
+        return;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        const juce::String error = work();
+        finish(completion, error.isEmpty(), error);
+    });
+}
+
+} // namespace
+
+juce::File bundledDriverLocation()
+{
+    @autoreleasepool {
+        NSString* resources = [NSBundle mainBundle].resourcePath;
+        if (resources == nil)
+            return {};
+        return juce::File(toJuce(resources)).getChildFile("fixomic.driver");
+    }
+}
+
+bool driverInstalled()
+{
+    return juce::File(kInstalledDriverPath).isDirectory() && micPresent();
+}
+
+juce::String bundledDriverVersion()
+{
+    const auto bundle = bundledDriverLocation();
+    return bundle.isDirectory() ? plistValue(bundle, @"CFBundleShortVersionString") : juce::String();
+}
+
+juce::String installedDriverVersion()
+{
+    return plistValue(juce::File(kInstalledDriverPath), @"CFBundleShortVersionString");
+}
+
+int compareVersions(const juce::String& a, const juce::String& b)
+{
+    juce::StringArray left, right;
+    left.addTokens(a.trim(), ".", "");
+    right.addTokens(b.trim(), ".", "");
+    for (int i = 0; i < std::max(left.size(), right.size()); ++i) {
+        const auto x = i < left.size() ? left[i].trim().getLargeIntValue() : 0;
+        const auto y = i < right.size() ? right[i].trim().getLargeIntValue() : 0;
+        if (x != y)
+            return x < y ? -1 : 1;
+    }
+    return 0;
+}
+
+bool isDriverUpdate(const juce::String& bundled, const juce::String& installed)
+{
+    return bundled.isNotEmpty() && installed.isNotEmpty() && compareVersions(bundled, installed) > 0;
+}
+
+bool driverOperationInProgress()
+{
+    return operationRunning;
+}
+
+void installDriverAsync(DriverCompletion completion)
+{
+    runOperation(std::move(completion), [] () -> juce::String {
+        const auto source = bundledDriverLocation();
+        if (!source.isDirectory())
+            return text("Il driver non \u00e8 incluso nell'app (") + source.getFullPathName() + ")";
+        if (plistValue(source, @"CFBundleIdentifier") != kDriverBundleId)
+            return text("Il driver incluso nell'app non \u00e8 valido (") + source.getFullPathName() + ")";
+
+        const auto result = driver_script::run(driver_script::install(source.getFullPathName(), kInstalledDriverPath));
+        if (result.cancelled)
+            return "Installazione annullata";
+        if (!result.ok)
+            return "Installazione del driver non riuscita: " + result.message;
+        if (!waitForMic(true))
+            return text("Il driver \u00e8 stato installato, ma fixomic Mic non \u00e8 comparso entro ")
+                   + juce::String(static_cast<int>(kDriverWaitSeconds)) + " secondi. Riavvia il Mac se non compare.";
+        return {};
+    });
+}
+
+void uninstallDriverAsync(DriverCompletion completion)
+{
+    runOperation(std::move(completion), [] () -> juce::String {
+        if (!juce::File(kInstalledDriverPath).exists())
+            return {};   // nothing to remove: no password, no coreaudiod restart
+        const auto result = driver_script::run(driver_script::uninstall(kInstalledDriverPath));
+        if (result.cancelled)
+            return "Disinstallazione annullata";
+        if (!result.ok)
+            return "Disinstallazione del driver non riuscita: " + result.message;
+        if (!waitForMic(false))
+            return text("Il driver \u00e8 stato rimosso, ma fixomic Mic \u00e8 ancora presente dopo ")
+                   + juce::String(static_cast<int>(kDriverWaitSeconds)) + " secondi. Riavvia il Mac.";
+        return {};
+    });
+}
+
+// ---- building blocks --------------------------------------------------------------------------
+
+namespace driver_script {
+
+juce::String appleScriptString(const juce::String& text)
+{
+    return "\"" + text.replace("\\", "\\\\").replace("\"", "\\\"") + "\"";
+}
+
+namespace {
+
+juce::String doShellScript(const juce::String& commandExpression, const Options& options)
+{
+    return "do shell script " + commandExpression + (options.administrator ? " with administrator privileges" : "");
+}
+
+// AppleScript expression for the coreaudiod restart (appended to a shell command).
+juce::String restartTail(const Options& options)
+{
+    return options.restartCoreAudio
+               ? " & \" && { /usr/bin/killall coreaudiod || /bin/launchctl kickstart -k system/com.apple.audio.coreaudiod; }\""
+               : juce::String();
+}
+
+} // namespace
+
+juce::String install(const juce::String& source, const juce::String& destination, Options options)
+{
+    const juce::String parent = juce::File(destination).getParentDirectory().getFullPathName();
+    juce::String script;
+    script << "set src to " << appleScriptString(source) << "\n"
+           << "set dst to " << appleScriptString(destination) << "\n"
+           << "set dir to " << appleScriptString(parent) << "\n";
+    juce::String command = "\"/bin/mkdir -p \" & quoted form of dir & \" && /bin/rm -rf \" & quoted form of dst"
+                           " & \" && /usr/bin/ditto \" & quoted form of src & \" \" & quoted form of dst";
+    if (options.administrator)
+        command << " & \" && /usr/sbin/chown -R root:wheel \" & quoted form of dst";
+    command << " & \" && /bin/chmod -R go-w \" & quoted form of dst" << restartTail(options);
+    script << doShellScript(command, options) << "\n";
+    return script;
+}
+
+juce::String uninstall(const juce::String& destination, Options options)
+{
+    juce::String script;
+    script << "set dst to " << appleScriptString(destination) << "\n";
+    const juce::String command = "\"/bin/rm -rf \" & quoted form of dst" + restartTail(options);
+    script << doShellScript(command, options) << "\n";
+    return script;
+}
+
+Result run(const juce::String& source)
+{
+    @autoreleasepool {
+        NSAppleScript* script = [[NSAppleScript alloc] initWithSource:toNs(source)];
+        NSDictionary* errorInfo = nil;
+        [script executeAndReturnError:&errorInfo];
+        Result result;
+        if (errorInfo == nil) {
+            result.ok = true;
+            return result;
+        }
+        result.cancelled = [errorInfo[NSAppleScriptErrorNumber] intValue] == -128;   // userCanceledErr
+        result.message = toJuce(errorInfo[NSAppleScriptErrorMessage]);
+        if (result.message.isEmpty())
+            result.message = "errore AppleScript " + juce::String([errorInfo[NSAppleScriptErrorNumber] intValue]);
+        return result;
+    }
+}
+
+} // namespace driver_script
+
+} // namespace fixomic::mac

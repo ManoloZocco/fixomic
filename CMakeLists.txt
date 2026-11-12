@@ -39,6 +39,8 @@ add_library(fixomic_core STATIC
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
     src/platform/mac/Permissions.mm
+    src/platform/mac/DriverInstaller.mm
+    src/platform/mac/LoginItem.mm
     src/plugins/PluginCatalog.cpp
     src/plugins/PluginWindows.cpp
 )
@@ -51,7 +53,10 @@ set_source_files_properties(
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
     src/platform/mac/Permissions.mm
+    src/platform/mac/DriverInstaller.mm
+    src/platform/mac/LoginItem.mm
     tests/MacEngineTests.mm
+    tests/PlatformServicesTests.mm
     PROPERTIES COMPILE_OPTIONS "-fobjc-arc")
 target_include_directories(fixomic_core PUBLIC src)
 target_compile_features(fixomic_core PUBLIC cxx_std_20)
@@ -88,6 +93,7 @@ target_link_libraries(fixomic_core
         "-framework Foundation"
         "-framework AppKit"
         "-framework AVFoundation"
+        "-framework ServiceManagement"
 )
 
 # Transitive closure of the modules above (property reads are not transitive), plus the
@@ -153,6 +159,26 @@ if(NOT DEFINED FIXOMIC_CODESIGN_IDENTITY)
         "Identity for codesign of fixomic.app (\"-\" = ad-hoc)")
 endif()
 message(STATUS "fixomic: signing with ${FIXOMIC_CODESIGN_IDENTITY}")
+
+# The HAL driver ships inside the app (Contents/Resources/fixomic.driver) for the in-app installer.
+# It is built separately by scripts/build-driver.sh (Xcode project, universal); without it the app
+# still builds, with a warning, and the installer reports that the driver is not bundled. Copied
+# before the codesign step below (POST_BUILD commands run in order), which seals it as a resource;
+# the driver keeps its own signature.
+set(FIXOMIC_DRIVER_BUNDLE "${CMAKE_CURRENT_SOURCE_DIR}/build/driver/fixomic.driver" CACHE PATH
+    "fixomic.driver to embed in fixomic.app (from scripts/build-driver.sh)")
+if(EXISTS "${FIXOMIC_DRIVER_BUNDLE}/Contents/MacOS/fixomic")
+    # Relink (and so copy again) when the driver is rebuilt.
+    set_property(TARGET fixomic APPEND PROPERTY LINK_DEPENDS
+        "${FIXOMIC_DRIVER_BUNDLE}/Contents/MacOS/fixomic" "${FIXOMIC_DRIVER_BUNDLE}/Contents/Info.plist")
+else()
+    message(WARNING "fixomic: ${FIXOMIC_DRIVER_BUNDLE} not found: run scripts/build-driver.sh, then "
+                    "re-run CMake, or fixomic.app will not carry the driver (in-app install unavailable)")
+endif()
+add_custom_command(TARGET fixomic POST_BUILD
+    COMMAND /bin/sh -c "rm -rf \"$1/Contents/Resources/fixomic.driver\" && if [ -d \"$0\" ]; then ditto \"$0\" \"$1/Contents/Resources/fixomic.driver\"; else echo \"warning: $0 not found (run scripts/build-driver.sh): fixomic.app ships without the driver\" >&2; fi"
+            "${FIXOMIC_DRIVER_BUNDLE}" "$<TARGET_BUNDLE_DIR:fixomic>"
+    VERBATIM)
 add_custom_command(TARGET fixomic POST_BUILD
     COMMAND codesign --force --timestamp=none --sign "${FIXOMIC_CODESIGN_IDENTITY}"
             --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fixomic.entitlements"
@@ -183,6 +209,7 @@ add_executable(fixomic_tests
     tests/MacEngineTests.mm
     tests/PluginCatalogTests.cpp
     tests/PluginWindowsTests.cpp
+    tests/PlatformServicesTests.mm
     tests/support/AllocCounter.cpp
 )
 target_include_directories(fixomic_tests PRIVATE tests)

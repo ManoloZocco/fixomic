@@ -10,6 +10,7 @@
 #include "platform/mac/CoreAudioDevices.h"
 #include "platform/mac/DemandMonitor.h"
 #include "platform/mac/MacEngineBackend.h"
+#include "platform/mac/Permissions.h"
 #include "platform/mac/WakeObserver.h"
 #include "plugins/PluginCatalog.h"
 #include "plugins/PluginWindows.h"
@@ -39,6 +40,11 @@ namespace fixomic {
 // it reflects the chain as last saved, and edits to it through updateConfig() are ignored.
 //
 // Never picks a microphone by itself: with no input selected the engine stays MicMissing.
+//
+// Launch at login: Config.launchAtLogin is the user's choice, the login item (SMAppService) its
+// effect. setLaunchAtLogin() applies and then persists; at startup a choice of "on" whose item is
+// missing (e.g. the app was moved) is registered again; an item the user turned off in System
+// Settings is left alone (launchAtLogin() reports the system state).
 //
 // Threading: message thread only. Every platform / engine / chain callback is re-posted with
 // juce::MessageManager::callAsync behind a weak reference, so none runs after destruction and none
@@ -95,6 +101,25 @@ public:
     LatencyBreakdown latency() const;
     std::vector<mac::AudioDeviceInfo> inputDevices() const;
 
+    // ---- platform services (permissions, driver, login item) ---------------------------------
+    using DriverCompletion = std::function<void(bool ok, juce::String error)>;
+    mac::Permission microphonePermission() const;
+    mac::Permission systemAudioPermission() const;   // NotDetermined also means "unknown"
+    bool driverInstalled() const;                    // installed and fixomic Mic published
+    juce::String bundledDriverVersion() const;       // "" when the app carries no driver
+    juce::String installedDriverVersion() const;     // "" when not installed
+    bool driverUpdateAvailable() const;              // both known, bundled > installed
+    bool driverOperationInProgress() const;
+    // Show the administrator authorization dialog (asynchronous, off the message thread). The
+    // completion runs on the message thread, never after destruction; the engine re-checks the
+    // devices first, and onModelChanged follows.
+    void installDriver(DriverCompletion);
+    void uninstallDriver(DriverCompletion);
+    bool launchAtLogin() const;                      // the login item is enabled (system state)
+    // Registers / unregisters the login item, then stores the choice in Config.launchAtLogin
+    // (only on success). False with an Italian error otherwise.
+    bool setLaunchAtLogin(bool enabled, juce::String& error);
+
     // State, chain, config or catalog changed. Message thread, never from inside a call above.
     std::function<void()> onModelChanged;
 
@@ -110,6 +135,7 @@ private:
     void changed();          // schedule a save and notify
     void notify();
     void scheduleSave();
+    void driverOperationDone(bool ok, const juce::String& error, const DriverCompletion&);
 
     ConfigStore store_;
     Config config_;

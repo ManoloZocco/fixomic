@@ -7,6 +7,7 @@
 
 #include <juce_core/juce_core.h>
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -28,6 +29,14 @@ struct MicrophoneAccess {
     std::function<void(std::function<void(bool)>)> request = requestMicrophone;
 };
 
+// Where openIO() gets the System Audio Recording state (injectable for tests).
+struct SystemAudioAccess {
+    std::function<Permission()> status = systemAudioPermission;
+    std::function<void(std::function<void()>)> request = requestSystemAudio;
+    // The silence fallback (see MacEngineBackend): whether the default output device is running.
+    std::function<bool()> outputRunning;   // empty = the real default output device
+};
+
 // EngineBackend on Core Audio: the private aggregate (mic + fixomic Bridge + optional system audio
 // tap, Task 6) whose IOProc runs the ProcessingGraph.
 //
@@ -40,6 +49,18 @@ struct MicrophoneAccess {
 // creates the aggregate, arms the graph's startup mute (kStartupMuteSamples + kStartupFadeSamples)
 // and starts it.
 //
+// Permissions, checked before any HAL call (the TCC prompts block the thread that triggers them,
+// see docs/notes/permissions.md):
+//   microphone not determined -> the prompt is raised once, openIO() fails with "In attesa del
+//     permesso per il microfono" until onMicrophonePermission; denied -> fails.
+//   system audio (only with a tap) not determined -> requestSystemAudio() raises the prompt once on
+//     a background queue, openIO() fails with "In attesa del permesso per l'audio di sistema" until
+//     onSystemAudioPermission; afterwards the tap is created normally. Denied -> the IO opens
+//     without the tap (AEC inactive) and onWarning tells where to enable it.
+//   Unless the permission is known to be granted, a tap that delivers only digital silence for
+//     TapSilenceWatch::kSilentSeconds while the default output device is running raises onWarning
+//     ("probably denied"), once per open.
+//
 // Threading: main thread only. The AEC stage, chain and graph must outlive the backend; nothing
 // else may prepare them while the IO is open.
 class MacEngineBackend : public EngineBackend {
@@ -47,12 +68,12 @@ public:
     using MicrophoneAccess = mac::MicrophoneAccess;
 
     MacEngineBackend(ProcessingGraph& graph, AecStage& aec, PluginChain& chain,
-                     std::function<Config()> configProvider, MicrophoneAccess = {});
+                     std::function<Config()> configProvider, MicrophoneAccess = {}, SystemAudioAccess = {});
     ~MacEngineBackend() override;   // closes the IO
     MacEngineBackend(const MacEngineBackend&) = delete;
     MacEngineBackend& operator=(const MacEngineBackend&) = delete;
 
-    bool driverInstalled() override;                         // fixomic Mic is present
+    bool driverInstalled() override;                         // mac::driverInstalled()
     bool micAvailable(const juce::String& uid) override;     // present, has inputs, not a fixomic device
     bool micSupports48k(const juce::String& uid) override;   // offers 48 kHz among its nominal rates
     bool openIO(bool withTap, juce::String& error) override;
@@ -74,7 +95,12 @@ public:
     // engine (e.g. EngineController::onMicListChanged(), deferred).
     std::function<void(bool granted)> onMicrophonePermission;
 
-    // The tap could not be created: the IO runs without echo cancellation. Main thread.
+    // The System Audio Recording prompt raised by openIO() was answered (outcome unknown). Main
+    // thread; re-evaluate the engine, deferred.
+    std::function<void()> onSystemAudioPermission;
+
+    // The tap could not be created, the system audio permission is denied, or the tap stays silent
+    // (permission probably denied): the IO runs without (working) echo cancellation. Main thread.
     std::function<void(juce::String)> onWarning;
     // The aggregate reported a lost / reconfigured device (forward to EngineController::onDeviceLost,
     // which may call closeIO() from inside the handler). Main thread.
@@ -82,14 +108,31 @@ public:
 
     static constexpr int kStartupMuteSamples = 14400;   // 300 ms at 48 kHz: hides the mic's start pop
     static constexpr int kStartupFadeSamples = 960;     // 20 ms fade-in after it
+    static constexpr double kSilenceCheckSeconds = 1.0;
+
+    static const char* const kWaitingForSystemAudio;
+    static juce::String systemAudioDeniedWarning();
+    static juce::String systemAudioSilentWarning();
 
 private:
+    enum class Request { None, Pending, Done };
+
+    // Applies the system audio permission to a tap request: false = do not open yet (`error` set).
+    bool checkSystemAudio(bool& withTap, juce::String& error);
+    void startSilenceWatch();
+    void stopSilenceWatch();
+
     ProcessingGraph& graph_;
     AecStage& aec_;
     PluginChain& chain_;
     std::function<Config()> configProvider_;
     MicrophoneAccess micAccess_;
+    SystemAudioAccess audioAccess_;
     bool micRequested_ = false;         // the prompt is raised at most once per backend
+    Request audioRequest_ = Request::None;   // the system audio prompt, at most once per backend
+    std::atomic<bool> refHeard_{false};      // set by the IO thread on a non-zero tap sample
+    struct SilenceTimer;
+    std::unique_ptr<SilenceTimer> silenceTimer_;
     std::shared_ptr<bool> alive_ = std::make_shared<bool>(true);   // guards the prompt completion
     std::unique_ptr<SystemAudioTap> tap_;
     std::unique_ptr<AggregateIO> io_;   // destroyed before tap_
