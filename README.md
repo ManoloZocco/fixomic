@@ -1,25 +1,316 @@
 # fixomic
 
-A macOS menu-bar app that sits between your microphone and apps like Discord:
-it cancels echo and runs a VST3/AU plugin chain on the microphone signal.
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/panel-dark.png">
+  <img src="docs/screenshots/panel-light.png" width="360" alt="Il pannello di fixomic nella barra dei menu / The fixomic menu-bar panel">
+</picture>
 
-Work in progress. Licensed under AGPL-3.0-or-later (see `LICENSE` and `NOTICE`).
+App per la barra dei menu di macOS che sta tra il tuo microfono e app come Discord: toglie l'eco,
+fa passare la voce in una catena di plugin AU e VST3 e la offre alle altre app come microfono
+virtuale, **fixomic Mic**.
 
-## Build
+*English below: [English](#english).*
 
-One-time: build the WebRTC audio processing (AEC3) static libraries (needs `brew install meson ninja`):
+## Cosa fa
 
-    scripts/build-webrtc-apm.sh
+- **Toglie l'eco.** Con le cuffie sul jack combo, o un headset vicino al microfono, quello che
+  ascolti rientra nel microfono e gli altri sentono il loro audio, o il tuo video. fixomic lo
+  cancella con WebRTC AEC3, usando come riferimento tutto quello che suona sul Mac.
+- **Catena di plugin.** Aggiungi, riordina con il trascinamento e metti in bypass plugin AU e VST3,
+  per esempio un gate e iZotope Nectar. Le loro finestre si aprono come in un DAW, e catena e
+  regolazioni restano salvate.
+- **fixomic Mic.** Un microfono virtuale, fornito da un driver incluso nell'app e derivato da
+  BlackHole. Lo scegli in Discord, Zoom o qualsiasi altra app.
+- **Solo quando serve.** Finché nessuna app usa fixomic Mic, fixomic non apre il microfono: niente
+  pallino arancione e niente consumo.
+- **Nella barra dei menu.** Nessuna icona nel Dock. Dal pannello hai il bypass globale (il
+  microfono crudo, per confronto), i livelli, l'eco rimossa e la latenza.
 
-Then:
+Requisiti: macOS 14.4 o successivo, Mac con Apple Silicon o Intel.
 
-    cmake -S . -B build -G Ninja
-    cmake --build build
-    ./build/fixomic_tests
+## Latenza
 
-## Virtual microphone driver
+La riga *Latenza* del pannello mostra quanto fixomic ritarda la tua voce: buffer, cancellazione
+dell'eco, plugin e dispositivi.
 
-`fixomic Mic` comes from a HAL driver built from BlackHole (GPL-3.0); see `driver/README.md`:
+| Senza plugin e senza dispositivi | Buffer 64 | Buffer 128 (predefinito) |
+|---|---|---|
+| Cancellazione eco attiva | 21,6 ms | 24,3 ms |
+| Cancellazione eco spenta | 2,7 ms | 5,3 ms |
 
-    scripts/build-driver.sh && sudo scripts/install-driver.sh
-    ./build/fxprobe check-driver
+Con buffer 128 sono i valori misurati sul Mac di sviluppo; con buffer 64, la stessa somma.
+Si aggiungono la latenza che i plugin dichiarano e quella dei dispositivi, di solito qualche
+millisecondo.
+
+L'obiettivo del progetto era ≤ 16 ms con la cancellazione dell'eco e ≤ 5 ms senza. **Con la
+cancellazione attiva non è raggiunto.** Il motivo è WebRTC AEC3, che da solo aggiunge 19,0 ms
+(910 campioni a 48 kHz). Lavora a blocchi fissi di 10 ms, e fixomic tiene un blocco di scorta per
+disaccoppiarlo dal buffer; il resto è il ritardo interno dell'AEC3, circa 9 ms. Per confronto,
+Discord aggiunge da solo circa 20 ms di codifica, più la rete. Se le tue cuffie non rientrano nel
+microfono, spegni la cancellazione dell'eco: risparmi quei 19 ms.
+
+## Installazione
+
+1. Scarica `fixomic-<versione>.zip` e `fixomic-<versione>.zip.sha256` dalle release del progetto
+   su GitHub. Se vuoi, verifica il file:
+
+   ```sh
+   shasum -a 256 -c fixomic-<versione>.zip.sha256
+   ```
+
+2. Apri lo zip e trascina **fixomic.app** in **Applicazioni**.
+3. **L'app non è firmata da uno sviluppatore registrato presso Apple**, quindi al primo avvio
+   macOS la blocca. Aprila in uno di questi modi:
+   - **macOS 14:** clic destro (o Ctrl-clic) su fixomic.app → **Apri**, poi ancora **Apri**.
+   - **macOS 15 e successivi:** prova ad aprirla una volta. Poi vai in **Impostazioni di Sistema →
+     Privacy e sicurezza**, scorri fino in fondo, fai clic su **Apri comunque** e conferma.
+   - **Da Terminale**, con qualsiasi versione:
+
+     ```sh
+     xattr -dr com.apple.quarantine /Applications/fixomic.app
+     ```
+
+4. L'icona di fixomic compare nella barra dei menu e si apre la guida del primo avvio:
+
+   <img src="docs/screenshots/onboarding-light.png" width="360" alt="La guida del primo avvio">
+
+   1. **Microfono:** concedi l'accesso e scegli il tuo microfono.
+   2. **Audio di sistema:** concedi *Registrazione schermo e audio di sistema*. fixomic ascolta
+      l'audio del Mac **solo per cancellare l'eco**, senza registrarlo né modificarlo. Se non lo
+      concedi, tutto il resto funziona, ma l'eco non viene tolta.
+   3. **Driver fixomic Mic:** vedi sotto.
+   4. **Scegli fixomic Mic nella tua app:** vedi [Usarlo in Discord](#usarlo-in-discord).
+
+   Se chiudi la guida prima della fine, il pannello mostra *Completa la configurazione*.
+
+### Il driver
+
+fixomic Mic esiste solo con il driver installato. Installalo dalla guida, o dal pannello:
+**Impostazioni… → Driver → Installa driver**.
+
+macOS chiede la password di amministratore. Il driver viene copiato in
+`/Library/Audio/Plug-Ins/HAL/fixomic.driver`, poi Core Audio si riavvia: l'audio del Mac si ferma
+per un attimo. Quando una nuova versione di fixomic contiene un driver più recente, nello stesso
+punto compare **Aggiorna driver**.
+
+<img src="docs/screenshots/settings-light.png" width="360" alt="Le impostazioni di fixomic">
+
+## Usarlo in Discord
+
+In Discord: **Impostazioni utente → Voce e video → Dispositivo di ingresso → fixomic Mic**.
+fixomic si accende da solo quando Discord inizia a usare il microfono, e si spegne circa 3 secondi
+dopo che ha smesso. Se vuoi sentire solo l'elaborazione di fixomic, spegni in Discord la
+cancellazione dell'eco e la soppressione del rumore.
+
+Funziona allo stesso modo in Zoom, Meet, OBS e in qualsiasi app che ti lascia scegliere il
+microfono.
+
+## Disinstallazione
+
+1. Nel pannello: **Impostazioni… → Driver → Disinstalla driver**, conferma con **Disinstalla** e
+   inserisci la password. fixomic Mic sparisce da tutte le app.
+2. Se avevi attivato **Avvio all'accesso**, spegnilo.
+3. Esci da fixomic (**Esci** nel pannello o nel menu dell'icona) e sposta fixomic.app nel Cestino.
+4. Se vuoi, cancella anche le impostazioni (catena, plugin, microfono scelto) e i permessi:
+
+   ```sh
+   rm -rf ~/Library/Application\ Support/fixomic
+   tccutil reset All it.manolozocco.fixomic
+   ```
+
+Se hai già cancellato l'app e il driver è rimasto, toglilo dal Terminale:
+
+```sh
+sudo rm -rf /Library/Audio/Plug-Ins/HAL/fixomic.driver && sudo killall coreaudiod
+```
+
+## Compilare dai sorgenti
+
+Prerequisiti: macOS 14.4 o successivo, **Xcode** (non bastano gli strumenti da riga di comando,
+perché il driver si compila con `xcodebuild`), e poi [Homebrew](https://brew.sh) con:
+
+```sh
+brew install cmake ninja meson
+```
+
+```sh
+git clone --recurse-submodules <url del repository> fixomic
+cd fixomic
+scripts/build-webrtc-apm.sh            # una volta: WebRTC AEC3, librerie statiche arm64, x86_64 e universali
+scripts/build-driver.sh                # il driver universale, in build/driver (finisce dentro l'app)
+cmake -S . -B build -G Ninja           # Debug
+cmake --build build
+./build/fixomic_tests "~[hardware]"    # i test che non richiedono dispositivi audio
+open build/fixomic_artefacts/Debug/fixomic.app
+```
+
+Se hai clonato senza `--recurse-submodules`: `git submodule update --init driver/BlackHole`.
+
+Note:
+
+- **Firma.** CMake firma l'app con la prima identità *Apple Development* del portachiavi, se c'è,
+  altrimenti ad-hoc. Con la firma ad-hoc macOS chiede di nuovo i permessi a ogni build. Puoi
+  sceglierla con `-DFIXOMIC_CODESIGN_IDENTITY="…"`, oppure `-` per ad-hoc.
+- **Driver senza l'app**, per lo sviluppo: `sudo scripts/install-driver.sh`,
+  `sudo scripts/uninstall-driver.sh` e `./build/fxprobe check-driver`. I dettagli sono in
+  [driver/README.md](driver/README.md).
+- **Release.** `scripts/package-release.sh` compila la build Release universale (arm64 + x86_64) in
+  `build-release/` e la firma ad-hoc, senza hardened runtime. Il risultato è
+  `dist/fixomic-<versione>.zip` con il suo `.sha256`. Lo script controlla le architetture, la
+  firma, il driver incluso, l'assenza della quarantena e dei comandi da sviluppatore.
+  Con `--clean` riparte da zero.
+- **Prove di accettazione:** [docs/acceptance.md](docs/acceptance.md).
+
+## Licenze
+
+- **fixomic**: GNU Affero General Public License v3.0 o successiva ([LICENSE](LICENSE)).
+- **Driver** (`driver/`, fixomic.driver): GNU General Public License v3.0
+  ([driver/LICENSE](driver/LICENSE)). È una build non ufficiale di
+  [BlackHole](https://github.com/ExistentialAudio/BlackHole) di Existential Audio, che non la
+  sostiene in alcun modo.
+- **Terze parti**: JUCE (AGPL-3.0), WebRTC audio processing (BSD-3-Clause), VST3 SDK (MIT) e le
+  altre componenti incluse sono elencate in [NOTICE](NOTICE). I testi delle licenze sono anche
+  dentro l'app, in `fixomic.app/Contents/Resources/Licenses`. Catch2 (BSL-1.0) serve solo ai test.
+
+---
+
+## English
+
+fixomic is a macOS menu-bar app that sits between your microphone and apps like Discord. It removes
+echo, runs your voice through a chain of AU and VST3 plugins, and offers the result to other apps as
+a virtual microphone, **fixomic Mic**. The screenshots are above.
+
+### What it does
+
+- **Removes echo.** With headphones on the combo jack, or a headset close to the microphone, what
+  you hear leaks into the microphone, and the others hear their own audio, or your video. fixomic
+  cancels it with WebRTC AEC3, using everything that plays on the Mac as the reference.
+- **Plugin chain.** Add, reorder by dragging and bypass AU and VST3 plugins, for example a gate and
+  iZotope Nectar. Their windows open as in a DAW, and the chain and its settings are saved.
+- **fixomic Mic.** A virtual microphone, provided by a driver that ships inside the app and is
+  derived from BlackHole. You choose it in Discord, Zoom or any other app.
+- **Only when needed.** While no app uses fixomic Mic, fixomic does not open the microphone: no
+  orange dot, no CPU use.
+- **In the menu bar.** No Dock icon. The panel has a global bypass (the raw microphone, to
+  compare), the levels, the echo removed and the latency.
+
+Requirements: macOS 14.4 or later, a Mac with Apple Silicon or Intel.
+
+### Latency
+
+The panel's *Latenza* row shows how much fixomic delays your voice: buffer, echo cancellation,
+plugins and devices.
+
+| Without plugins or devices | Buffer 64 | Buffer 128 (default) |
+|---|---|---|
+| Echo cancellation on | 21.6 ms | 24.3 ms |
+| Echo cancellation off | 2.7 ms | 5.3 ms |
+
+At buffer 128 these are the values measured on the development Mac; at buffer 64, the same sum.
+On top come the latency the plugins declare and the devices' own, usually a few milliseconds.
+
+The project's target was ≤ 16 ms with echo cancellation and ≤ 5 ms without. **With echo
+cancellation on it is not met.** The reason is WebRTC AEC3, which alone adds 19.0 ms (910 samples
+at 48 kHz). It works in fixed 10 ms blocks, and fixomic keeps one block in reserve to decouple it
+from the buffer; the rest is AEC3's own internal delay, about 9 ms. For comparison, Discord alone
+adds about 20 ms of encoding, plus the network. If your headphones do not leak into the
+microphone, turn echo cancellation off and save those 19 ms.
+
+### Installing
+
+1. Download `fixomic-<version>.zip` and `fixomic-<version>.zip.sha256` from the project's GitHub
+   releases. To check the file: `shasum -a 256 -c fixomic-<version>.zip.sha256`.
+2. Open the zip and drag **fixomic.app** to **Applications**.
+3. **The app is not signed by a developer registered with Apple**, so macOS blocks it on the first
+   launch. Open it in one of these ways:
+   - **macOS 14:** right-click (or Control-click) fixomic.app → **Open**, then **Open** again.
+   - **macOS 15 and later:** try to open it once. Then go to **System Settings → Privacy &
+     Security**, scroll to the bottom, click **Open Anyway** and confirm.
+   - **From Terminal**, on any version: `xattr -dr com.apple.quarantine /Applications/fixomic.app`
+4. The fixomic icon appears in the menu bar and the first-run guide opens. The app's interface is
+   in Italian; the four steps are:
+   1. **Microfono** (microphone): grant access and choose your microphone.
+   2. **Audio di sistema** (system audio): grant *Screen & System Audio Recording*. fixomic listens
+      to the Mac's audio **only to cancel echo**, without recording or changing it. Without it,
+      everything else works, but echo is not removed.
+   3. **Driver fixomic Mic**: see below.
+   4. **Scegli fixomic Mic nella tua app** (choose fixomic Mic in your app): see
+      [Using it in Discord](#using-it-in-discord).
+
+   If you close the guide before the end, the panel shows *Completa la configurazione*.
+
+#### The driver
+
+fixomic Mic exists only with the driver installed. Install it from the guide, or from the panel:
+**Impostazioni… (Settings) → Driver → Installa driver**.
+
+macOS asks for an administrator password. The driver is copied to
+`/Library/Audio/Plug-Ins/HAL/fixomic.driver`, then Core Audio restarts, so the Mac's audio stops for
+a moment. When a new fixomic version carries a newer driver, **Aggiorna driver** (update) appears in
+the same place.
+
+### Using it in Discord
+
+In Discord: **User Settings → Voice & Video → Input Device → fixomic Mic**. fixomic turns on by
+itself when Discord starts using the microphone, and off about 3 seconds after it stops. To hear
+only fixomic's processing, turn off Discord's own echo cancellation and noise suppression.
+
+It works the same way in Zoom, Meet, OBS and any app that lets you choose the microphone.
+
+### Uninstalling
+
+1. In the panel: **Impostazioni… → Driver → Disinstalla driver**, confirm with **Disinstalla** and
+   enter your password. fixomic Mic disappears from every app.
+2. If you turned on **Avvio all'accesso** (launch at login), turn it off.
+3. Quit fixomic (**Esci** in the panel or in the icon's menu) and move fixomic.app to the Trash.
+4. Optionally, delete the settings (chain, plugins, chosen microphone) and the permissions:
+   `rm -rf ~/Library/Application\ Support/fixomic` and
+   `tccutil reset All it.manolozocco.fixomic`.
+
+If you already deleted the app and the driver is still there, remove it from Terminal:
+`sudo rm -rf /Library/Audio/Plug-Ins/HAL/fixomic.driver && sudo killall coreaudiod`.
+
+### Building from source
+
+Prerequisites: macOS 14.4 or later, **Xcode** (the command-line tools alone are not enough, as the
+driver is built with `xcodebuild`), and [Homebrew](https://brew.sh) with
+`brew install cmake ninja meson`.
+
+```sh
+git clone --recurse-submodules <repository url> fixomic
+cd fixomic
+scripts/build-webrtc-apm.sh            # once: WebRTC AEC3, static libraries for arm64, x86_64 and universal
+scripts/build-driver.sh                # the universal driver, in build/driver (it goes inside the app)
+cmake -S . -B build -G Ninja           # Debug
+cmake --build build
+./build/fixomic_tests "~[hardware]"    # the tests that need no audio devices
+open build/fixomic_artefacts/Debug/fixomic.app
+```
+
+If you cloned without `--recurse-submodules`: `git submodule update --init driver/BlackHole`.
+
+Notes:
+
+- **Signing.** CMake signs the app with the first *Apple Development* identity in the keychain, if
+  there is one, otherwise ad-hoc. With an ad-hoc signature, macOS asks for the permissions again
+  after every build. Choose one with `-DFIXOMIC_CODESIGN_IDENTITY="…"`, or `-` for ad-hoc.
+- **Driver without the app**, for development: `sudo scripts/install-driver.sh`,
+  `sudo scripts/uninstall-driver.sh` and `./build/fxprobe check-driver`. Details are in
+  [driver/README.md](driver/README.md).
+- **Release.** `scripts/package-release.sh` builds the universal (arm64 + x86_64) Release build in
+  `build-release/` and signs it ad-hoc, without the hardened runtime. The result is
+  `dist/fixomic-<version>.zip` with its `.sha256`. The script checks the architectures, the
+  signature, the bundled driver, and that there is no quarantine and no developer command.
+  `--clean` starts from scratch.
+- **Acceptance tests:** [docs/acceptance.md](docs/acceptance.md) (in Italian).
+
+### Licences
+
+- **fixomic**: GNU Affero General Public License v3.0 or later ([LICENSE](LICENSE)).
+- **Driver** (`driver/`, fixomic.driver): GNU General Public License v3.0
+  ([driver/LICENSE](driver/LICENSE)). It is an unofficial build of
+  [BlackHole](https://github.com/ExistentialAudio/BlackHole) by Existential Audio, which does not
+  endorse it.
+- **Third parties**: JUCE (AGPL-3.0), WebRTC audio processing (BSD-3-Clause), the VST3 SDK (MIT) and
+  the other bundled components are listed in [NOTICE](NOTICE). The licence texts are also inside
+  the app, in `fixomic.app/Contents/Resources/Licenses`. Catch2 (BSL-1.0) is used only by the tests.

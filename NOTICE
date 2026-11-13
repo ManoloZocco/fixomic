@@ -2,26 +2,62 @@ fixomic
 Copyright (C) 2026 Manolo Zocco
 Licensed under the GNU Affero General Public License v3.0 or later (see LICENSE).
 
-This product includes or links against the following third-party components:
+fixomic.app carries a copy of every licence below in Contents/Resources/Licenses
+(scripts/package-release.sh puts them there). The source of everything listed is in this
+repository or fetched by its build: cmake/Dependencies.cmake (JUCE, Catch2),
+scripts/build-webrtc-apm.sh (WebRTC audio processing), the driver/BlackHole submodule.
 
-- BlackHole (virtual audio driver), Copyright (C) Existential Audio Inc.
+
+Distributed in fixomic.app
+--------------------------
+
+- BlackHole v0.7.2 (virtual audio driver)
+  Copyright (C) 2019-2026 Existential Audio Inc.
   License: GPL-3.0 (see driver/LICENSE)
   https://github.com/ExistentialAudio/BlackHole
-  The fixomic driver (driver/) is an unofficial build of BlackHole v0.7.2 with fixomic names,
-  icon and a small branding patch; it is not endorsed by Existential Audio.
+  The fixomic driver (fixomic.app/Contents/Resources/fixomic.driver, built from driver/) is an
+  unofficial build of BlackHole v0.7.2 with fixomic names, icon and a small branding patch; it is
+  not endorsed by Existential Audio. It is a separate program, a Core Audio HAL plug-in loaded by
+  coreaudiod, and carries its own copy of the GPL-3.0. Its complete source: the driver/BlackHole
+  submodule (tag v0.7.2), driver/patches and scripts/build-driver.sh.
 
-- JUCE
-  License: AGPL-3.0
+- JUCE 8.0.17
+  Copyright (C) Raw Material Software Limited
+  License: AGPL-3.0 (JUCE's open-source licence)
   https://github.com/juce-framework/JUCE
+  Compiled into the app with JUCE, under their own licences:
+  - VST3 SDK, Copyright (c) 2025 Steinberg Media Technologies GmbH. License: MIT.
+    https://github.com/steinbergmedia/vst3sdk
+  - HarfBuzz, Copyright (c) 2010-2022 Google, Inc. and others. License: "Old MIT".
+    https://github.com/harfbuzz/harfbuzz
+  - SheenBidi, Copyright (C) 2014-2025 Muhammad Tayyab Akram. License: Apache-2.0.
+    https://github.com/Tehreer/SheenBidi
+  - libpng, Copyright (c) 1995-2019 The PNG Reference Library Authors.
+    License: PNG Reference Library License version 2. http://www.libpng.org/pub/png/libpng.html
+  - libjpeg (Independent JPEG Group), copyright (C) 1991-2024 Thomas G. Lane, Guido Vollbeding.
+    License: IJG License. This software is based in part on the work of the Independent JPEG Group.
+  - zlib, Copyright (C) 1995-2024 Jean-loup Gailly and Mark Adler. License: zlib.
+    https://zlib.net
 
-- WebRTC audio processing (AEC3)
-  License: BSD-3-Clause
+- WebRTC audio processing (AEC3), as packaged by webrtc-audio-processing v2.1
+  Copyright (c) 2011, The WebRTC project authors
+  License: BSD-3-Clause, with the WebRTC additional IP rights grant (PATENTS)
   https://webrtc.googlesource.com/src/
+  https://gitlab.freedesktop.org/pulseaudio/webrtc-audio-processing
+  Compiled into the app with it, under their own licences:
+  - Abseil (abseil-cpp 20240722.0), Copyright The Abseil Authors. License: Apache-2.0.
+    https://github.com/abseil/abseil-cpp
+  - RNNoise, Copyright (c) 2017 Mozilla, (c) 2007-2017 Jean-Marc Valin,
+    (c) 2005-2017 Xiph.Org Foundation, (c) 2003-2004 Mark Borgerding. License: BSD-3-Clause.
+  - PFFFT, Copyright (c) 2013 Julien Pommier, after FFTPACKv4 by Paul Swarztrauber (NCAR).
+    License: FFTPACKv5 licence (BSD-style).
+  - Ooura FFT, Copyright Takuya Ooura, 1996-2001. License: permissive (see its LICENSE).
+  - spl_sqrt_floor, written by Wilco Dijkstra, 1996. License: permissive (see its LICENSE).
 
-- VST3 SDK
-  License: MIT
-  https://github.com/steinbergmedia/vst3sdk
 
-- Catch2 (test framework, not distributed in the app)
+Used only to build and test, not distributed
+--------------------------------------------
+
+- Catch2 v3.9.1 (test framework)
   License: BSL-1.0
   https://github.com/catchorg/Catch2
