@@ -32,19 +32,32 @@ APP=build/fixomic_artefacts/Debug/fixomic.app
 open --stdout /tmp/fixomic.log --stderr /tmp/fixomic.log "$APP"
 open -n "$APP" --args --status          # stato, latenza, catena, picchi ed ERLE nel log
 ffmpeg -f avfoundation -i ":fixomic Mic" -t 30 -ac 1 -ar 48000 mic.wav   # registra fixomic Mic
+open -n "$APP" --args --set-aec 0       # cancellazione eco spenta (1: accesa), come l'interruttore
 ```
+
+> **ffmpeg va bene come client, non come registratore di misura.** Su questo Mac l'ingresso
+> `avfoundation` di ffmpeg 9.0.2 perde circa un buffer su cinque senza avvisare: con `-t 75` ha
+> scritto 60 s di audio in 76,6 s, anche dal microfono fisico, quindi non è fixomic. In più `-ac 1`
+> somma i due canali uguali di fixomic Mic (+3 dB). Per livelli e click 11b ha usato un registratore
+> Core Audio che scrive ogni frame (`carec`, vedi `task-11b-report.md`).
 
 ## Riepilogo
 
 | # | Prova | Chi | Esito |
 |---|-------|-----|-------|
-| 1 | Video in cuffia, utente in silenzio: l'altro non sente il video | 11b (misura) + Utente (Discord) | |
-| 2 | Utente che parla sopra il video: voce chiara, video non udibile | 11b (misura dell'eco) + Utente (voce, Discord) | |
-| 3 | Catena Gate + Nectar attiva: voce trattata | Utente (a orecchio) | |
-| 4 | Latenza mostrata ≤ 16 ms (AEC on) e ≤ 5 ms (AEC off), esclusi i plugin | 11b | |
-| 5 | Sessione di 2 ore: nessun click, latenza mostrata invariata | 11b (registrazione) | |
-| 6 | Sleep/wake e cuffie staccate e riattaccate a metà chiamata: riprende da solo, silenzio durante il distacco | Utente | |
-| 7 | Discord chiuso: pallino arancione spento entro ~3 s | 11b (indicatore di richiesta) + Utente (pallino) | |
+| 1 | Video in cuffia, utente in silenzio: l'altro non sente il video | 11b (misura) + Utente (Discord) | 11b ✅ 13/11: eco −31,6 dB, residuo sotto il rumore di fondo · Discord: da fare dall'utente |
+| 2 | Utente che parla sopra il video: voce chiara, video non udibile | 11b (misura dell'eco) + Utente (voce, Discord) | misura dell'eco: vedi 1 · voce: da fare dall'utente |
+| 3 | Catena Gate + Nectar attiva: voce trattata | Utente (a orecchio) | da fare dall'utente |
+| 4 | Latenza mostrata ≤ 16 ms (AEC on) e ≤ 5 ms (AEC off), esclusi i plugin | 11b | ❌ 13/11: 29,1 ms (AEC on) e 10,2 ms (AEC off) con buffer 128; 7,5 ms AEC off con buffer 64 |
+| 5 | Sessione di 2 ore: nessun click, latenza mostrata invariata | 11b (registrazione) | da rifare: interrotto su richiesta dell'utente dopo 28,8 min (nessun click né buco in quei minuti, latenza 30,1 ms invariata) |
+| 6 | Sleep/wake e cuffie staccate e riattaccate a metà chiamata: riprende da solo, silenzio durante il distacco | Utente | da fare dall'utente |
+| 7 | Discord chiuso: pallino arancione spento entro ~3 s | 11b (indicatore di richiesta) + Utente (pallino) | 11b ✅ 13/11: microfono chiuso dopo 3,18–3,32 s · pallino: da fare dall'utente |
+| — | Client VoiceProcessingIO (FaceTime, Discord): richiesta e audio | 11b | ✅ 13/11: Attivo in 0,25–0,27 s, audio ricevuto, In attesa 3,2–3,3 s dopo lo stop |
+
+Ambiente delle misure 11b (13/11/2026): MacBook Air, macOS 27.2, build Debug di `feat/v1`. Cuffie
+HyperX sul jack combo, *appoggiate sulla scrivania* accanto al Mac: l'eco è diafonia elettrica più il
+suono che esce dai padiglioni ed entra nel microfono, più forte che a cuffie indossate. Volumi di
+ingresso e uscita al massimo. Microfono *Microfono esterno*, buffer 128, catena *Nectar 4 Gate*.
 
 ## 1. Video in cuffia, utente in silenzio
 
@@ -64,7 +77,37 @@ video si sente. Annota la differenza di livello in dB.
 
 | Misura (11b) | Discord (Utente) |
 |---|---|
-| | |
+| ✅ 13/11/2026: con la cancellazione attiva l'eco scende di 31,6 dB e resta 22 dB sotto il rumore di fondo; in RMS fixomic Mic è 1 dB sotto il rumore di prima del programma | da fare dall'utente |
+
+Misure 11b (programma di 60 s in cuffia, dettagli e metodo sotto):
+
+| Registrazione | Rumore di fondo | Durante il programma | Eco (parte coerente col programma) |
+|---|---|---|---|
+| Microfono crudo (*Microfono esterno*, senza fixomic) | −41,7 dBFS | −31,8 dBFS | −32,3 dB |
+| fixomic Mic, cancellazione spenta | −41,9 dBFS | −31,9 dBFS | −32,4 dB |
+| fixomic Mic, cancellazione attiva, gate escluso | −42,0 dBFS | **−43,0 dBFS** | **−64,0 dB** |
+| fixomic Mic, cancellazione attiva, catena attiva | −42,0 dBFS | **−43,0 dBFS** | **−65,2 dB** |
+
+- L'eco c'è davvero: nel microfono crudo il programma sta circa 10 dB sopra il rumore della stanza
+  (−41,7 dBFS: è il rumore della stanza, lo stesso con e senza fixomic).
+- Con la cancellazione spenta fixomic Mic è il microfono crudo (stesso livello, stessa eco).
+- Con la cancellazione attiva il livello durante il programma (−43,0 dBFS) è 11,1 dB sotto quello a
+  cancellazione spenta e 1 dB *sotto* il rumore di fondo: in RMS non si può scendere oltre, il resto
+  è la stanza. L'eco vera, separata dal rumore, scende di 31,6 dB (32,8 dB con la catena), fino a
+  4 dB dal limite di misura (−68 dB).
+- *Eco rimossa* (`ERLE` di `--status`) a +20, +40 e +55 s: 12, 6, 9 dB a gate escluso, 11, 6, 8 dB
+  con la catena. Il pannello calcola energia del microfono / energia dell'uscita: con un'eco solo
+  10 dB sopra il rumore non può leggere molto più di 10 dB, anche se l'eco è tolta quasi tutta.
+
+**Metodo (11b).** Programma di 60 s generato sul Mac: voce `say -v Alice` su un letto musicale di
+sintesi (ffmpeg `aevalsrc`), −14,7 LUFS come YouTube, suonato in cuffia con `afplay`. Quattro
+riprese: cancellazione attiva e spenta (`--set-aec 1|0`), con il gate escluso (`--bypass 0 1`) e
+con la catena attiva. In ogni ripresa `carec` registra insieme fixomic Mic (canale 0) e il microfono
+crudo: 6 s di silenzio, il programma, 6 s di silenzio. Il microfono crudo si allinea al programma per
+correlazione; fixomic Mic si allinea al microfono crudo seguendo la deriva tra i due orologi (33 ppm:
+fixomic Mic va col clock del driver, il microfono col codec). L'eco coerente è la potenza della
+registrazione prevedibile linearmente dal programma (spettri incrociati di Welch): il rumore della
+stanza non è coerente col programma, quindi resta fuori. `--status` a +20, +40 e +55 s per l'ERLE.
 
 ## 2. Utente che parla sopra il video
 
@@ -83,7 +126,7 @@ double-talk: meglio un po' di eco residua che una voce mangiata.
 
 | Misura (11b) | Voce in Discord (Utente) |
 |---|---|
-| | |
+| L'eco del video senza voce è quella del punto 1 (−31,6 dB, sotto il rumore). La parte con la voce richiede una persona | da fare dall'utente (passi in *Da fare dall'utente*) |
 
 ## 3. Catena Gate + Nectar
 
@@ -99,7 +142,7 @@ le regolazioni sono quelle di prima.
 
 | Utente |
 |---|
-| |
+| da fare dall'utente (passi in *Da fare dall'utente*) |
 
 ## 4. Latenza mostrata
 
@@ -116,12 +159,28 @@ Togli la parte *plugin* dal totale.
 > attiva: **24,3 ms** più i dispositivi, oltre l'obiettivo di 16 ms. Con la cancellazione spenta:
 > **5,3 ms** con buffer 128 e **2,7 ms** con buffer 64, più i dispositivi.
 
-**Esito.**
+**Esito.** ❌ 13/11/2026: gli obiettivi del piano non sono raggiunti, come già noto. Con un client
+in lettura (stato *Attivo*), dal `--status`:
 
 | Buffer | AEC on (senza plugin) | AEC off (senza plugin) | Dispositivi |
 |---|---|---|---|
-| 64 | | | |
-| 128 | | | |
+| 64 | ❌ 26,5 ms (mostrati 27,4 ms) | ❌ 7,5 ms (mostrati 8,5 ms) | 4,8 ms (ingresso 168 + uscita 64 campioni) |
+| 128 | ❌ 29,1 ms (mostrati 30,1 ms) | ❌ 10,2 ms (mostrati 11,2 ms) | 4,8 ms (ingresso 168 + uscita 64 campioni) |
+
+- Le parti, in campioni a 48 kHz: buffer 2 × il buffer scelto (128 con buffer 64, 256 con buffer
+  128), eco 910 (19,0 ms), plugin 47
+  (1,0 ms, *Nectar 4 Gate*), dispositivi 232 (4,8 ms). Senza i dispositivi i totali sono quelli già
+  noti: 24,3 ms (AEC on, 128), 5,3 ms (AEC off, 128), 2,7 ms (AEC off, 64).
+- La sola cancellazione eco (19,0 ms) supera l'obiettivo di 16 ms. A cancellazione spenta i 5 ms si
+  rispettano solo con buffer 64 e senza contare i dispositivi.
+- Il pannello mostra le stesse cifre: *Latenza 30,1 ms*, *Buffer 5,3 · eco 19,0 · plugin 1,0 ·
+  dispositivi 4,8 ms* (snapshot con AEC on, buffer 128).
+
+**Metodo (11b).** `carec` legge fixomic Mic per tutta la prova. Per ogni combinazione
+`--set-aec 1|0 --set-buffer 128|64`, 3 s di assestamento e poi `--status`, che ora stampa anche il
+dettaglio in campioni (`latency … : buffer, aec, plugins, input device, output device`). Ogni cambio
+riapre l'IO: il client riceve 0,35–0,39 s di silenzio (zeri), senza click. Poi `--snapshot` del
+pannello.
 
 ## 5. Sessione di 2 ore
 
@@ -133,11 +192,39 @@ buchi di zeri dentro il segnale, ripetizioni di blocchi.
 **Atteso.** Nessun click, nessun buco e nessun drop-out nella registrazione. La latenza mostrata
 resta identica dall'inizio alla fine. Lo stato resta *Attivo*.
 
-**Esito.**
+**Esito.** Da rifare: la sessione è stata interrotta su richiesta dell'utente (13/11/2026, 03:19:
+niente suono in cuffia di notte). Risultato parziale dei minuti registrati:
 
 | Click / buchi trovati | Latenza: inizio → fine | Note |
 |---|---|---|
-| | | |
+| Nessuno in 28,8 min (27,2 min con il programma in cuffia): 0 buchi di zeri, 0 blocchi ripetuti, 0 salti nella linea del tempo. I 4 picchi segnalati dal rilevatore sono suoni presenti anche nel microfono crudo nello stesso istante | 30,1 ms → 30,1 ms (inizio, +10 min, +20 min; stesse parti: buffer 256, eco 910, plugin 47, dispositivi 168 + 64 campioni) | Stato *Attivo* per tutta la sessione, nessun riavvio dell'IO; da rifare per 2 ore intere |
+
+- Contatori dell'IO (`ioDiagnostics()`): stesso aggregato (376) dall'inizio, callback × 128 = frame a
+  ogni lettura, 48000,1 e 47999,9 frame/s tra le letture: nessuna callback persa, nessuna
+  riapertura, nessun riavvio di Core Audio.
+- Il registratore su fixomic Mic ha ricevuto 82 939 392 frame (1727,9 s) in 1727,8 s, senza
+  discontinuità nel tempo dei campioni e senza sovraccarichi.
+- Lo scarto tra fixomic Mic e il microfono crudo segue la deriva tra i due orologi (circa 33 ppm) con
+  un residuo di 1,0 campioni RMS (massimo 2,4). Un buffer perso o ripetuto si vedrebbe come un salto
+  di almeno 128 campioni.
+- coreaudiod durante la sessione: 5,7% di CPU in media (il lavoro dell'IO), con un picco breve del
+  13–22% a +20 min; fixomic 5,3%, ControlCenter 0,6%.
+
+**Metodo (11b).**
+- `carec` registra per tutta la sessione fixomic Mic e il microfono crudo, mentre in cuffia gira in
+  loop un programma di 240 s: voce, musica, silenzi e rumore rosa. Cancellazione eco attiva, catena
+  *Nectar 4 Gate*.
+- Ogni 10 minuti: `--status` e `top`.
+- Analisi della registrazione:
+  - picchi della derivata seconda oltre 12 volte il suo RMS locale, ciascuno confrontato con il
+    microfono crudo nello stesso istante;
+  - buchi di zeri esatti;
+  - blocchi di 64–512 campioni ripetuti;
+  - lo scarto da fixomic Mic al microfono crudo, finestra per finestra.
+
+**Da rifare.** Rifare la sessione intera di 2 ore quando il suono in cuffia non disturba nessuno:
+`run_soak.sh 7200` di 11b (in `task-11b-report.md`), oppure due ore di video in cuffia con Discord
+(o `ffmpeg`) che legge fixomic Mic, poi le stesse analisi.
 
 ## 6. Sleep/wake e cuffie staccate a metà chiamata
 
@@ -157,7 +244,7 @@ resta identica dall'inizio alla fine. Lo stato resta *Attivo*.
 
 | Sleep/wake | Cuffie staccate e riattaccate |
 |---|---|
-| | |
+| da fare dall'utente | da fare dall'utente |
 
 ## 7. Discord chiuso, pallino arancione
 
@@ -176,4 +263,98 @@ fixomic resta acceso.
 
 | Indicatore di richiesta (11b) | Pallino arancione (Utente) |
 |---|---|
-| | |
+| ✅ 13/11/2026, circa 3 s: il microfono delle cuffie si chiude 3,18–3,32 s dopo la chiusura del client (4 prove su 4) | da fare dall'utente |
+
+Tempi dal Ctrl-C (SIGINT) del client che legge fixomic Mic:
+
+| Prova | Client uscito | fixomic Mic senza client | fixomic *In attesa* | Microfono cuffie spento |
+|---|---|---|---|---|
+| ffmpeg 1 | +0,075 s | +0,016 s | +3,240 s | +3,235 s |
+| ffmpeg 2 | +0,071 s | +0,025 s | +3,318 s | +3,312 s |
+| ffmpeg 3 | +0,061 s | +0,013 s | +3,186 s | +3,182 s |
+| carec | +0,034 s | +0,008 s | +3,275 s | +3,271 s |
+
+- La richiesta cade subito (8–25 ms); poi fixomic aspetta la grazia di progetto di 3,0 s
+  (`EngineController::kStopGraceSeconds`), controllata dal timer di 200 ms, e chiude l'IO: il
+  microfono fisico smette di girare 4–6 ms prima del log *In attesa*.
+- È "circa 3 s" come chiede il piano. Un limite stretto di 3,0 s non si può rispettare con questa
+  grazia: si va oltre di 0,18–0,32 s ogni volta.
+- All'avvio del client fixomic va *Attivo* in 0,52–0,58 s con ffmpeg, 0,31 s con carec.
+
+**Metodo (11b).** `devtool poll` (Core Audio, ogni 5 ms, orologio del log di fixomic) segue
+`kAudioDevicePropertyDeviceIsRunningSomewhere` di fixomic Mic e del microfono delle cuffie: è la
+proprietà che accende il pallino arancione. Client: `ffmpeg -f avfoundation -i ":fixomic Mic"`, 8 s,
+poi `kill -INT`; una quarta prova con `carec`. Lo stato *In attesa* viene dal log dell'app
+(`engine state -> Idle`).
+
+## Client VoiceProcessingIO (FaceTime, Discord)
+
+**Come.** *11b:* un piccolo programma apre fixomic Mic con l'unità audio `VoiceProcessingIO` di Apple
+(quella che usano FaceTime e molte app VoIP), con fixomic Mic scelto come dispositivo d'ingresso
+(`kAudioOutputUnitProperty_CurrentDevice`), e registra 10 s. Una volta in silenzio, una volta con il
+programma del punto 1 in cuffia.
+
+**Atteso.** fixomic va *Attivo*, la registrazione ha segnale, e torna *In attesa* circa 3 s dopo la
+chiusura del programma.
+
+**Esito.** ✅ 13/11/2026.
+
+| Prova | Dispositivo dell'unità | *Attivo* dopo | Audio ricevuto | *In attesa* dopo lo stop |
+|---|---|---|---|---|
+| silenzio | fixomic Mic | +0,25 s | 10,01 s, RMS −51,8 dBFS, picco −31,2 dBFS | +3,16 s |
+| programma in cuffia | fixomic Mic | +0,27 s | 10,01 s, RMS −54,8 dBFS, picco −36,7 dBFS | +3,27 s |
+
+- L'unità accetta fixomic Mic come ingresso (non è servito cambiare l'ingresso predefinito del
+  sistema, che è rimasto *Microfono MacBook Air*).
+- Dopo i primi 0,50–0,56 s di zeri (l'avvio dell'IO) il segnale è continuo, senza buchi. Il livello è
+  più basso del microfono crudo perché `VoiceProcessingIO` applica la sua riduzione del rumore e
+  abbassa l'altro audio (il programma) mentre è attiva.
+
+## Da fare dall'utente
+
+Queste prove richiedono una persona: un secondo ascoltatore in Discord, l'ascolto a orecchio, lo
+stop del Mac e le cuffie da staccare. 11b non le ha eseguite.
+
+**Preparazione (una volta).**
+1. Esci da ogni copia di fixomic aperta (icona nella barra dei menu → *Esci*). Apri la copia
+   installata da `dist/`.
+2. Nel pannello di fixomic → *Impostazioni…*: microfono *Microfono esterno*, buffer 128. Nel
+   pannello: *Cancellazione eco* attiva, *Bypass* spento, catena con *Nectar 4 Gate*.
+3. Discord → Impostazioni utente → *Voce e video*: dispositivo di ingresso *fixomic Mic*, uscita
+   *Cuffie esterne*. Spegni la cancellazione dell'eco, la soppressione del rumore e il controllo
+   automatico del guadagno di Discord.
+4. Avvia una chiamata con un secondo account Discord su un altro dispositivo (o con una persona) che
+   ascolta in cuffia. Indossa le cuffie HyperX.
+
+**Punto 1, l'ascoltatore e il video.**
+1. Avvia un video YouTube con parlato e musica, volume di sistema normale. Resta in silenzio per
+   30 s. L'ascoltatore dice se sente il video.
+2. Spegni *Cancellazione eco* nel pannello per 30 s (controprova: ora il video deve sentirsi), poi
+   riaccendila.
+3. Scrivi nella cella *Discord (Utente)* del punto 1: ✅ se a cancellazione attiva il video non si
+   sente, ❌ altrimenti, con la data.
+
+**Punto 2, voce sopra il video.**
+1. Con lo stesso video, parla normalmente per circa un minuto, anche sopra i passaggi forti.
+2. L'ascoltatore giudica: voce intera (nessuna sillaba mangiata), niente "effetto radio", video
+   udibile o no. Scrivilo nella cella *Voce in Discord*.
+
+**Punto 3, catena Gate + Nectar.**
+1. Nel pannello, *+ Aggiungi plugin* → Nectar (dopo *Nectar 4 Gate*). Regola gate e Nectar dalle
+   loro finestre.
+2. Parla per 30 s con la catena attiva, poi per 30 s con *Bypass* acceso. L'ascoltatore deve
+   sentire la differenza: il gate chiude nelle pause e Nectar tratta la voce; con il bypass arriva il
+   microfono crudo.
+3. Spegni *Bypass*, esci da fixomic e riaprilo: catena e regolazioni devono essere quelle di prima.
+
+**Punto 6, sleep/wake e cuffie staccate.**
+1. In chiamata, menu Apple → *Stop*. Aspetta almeno un minuto, risveglia il Mac e parla: la voce deve
+   tornare da sola, senza toccare fixomic né Discord.
+2. Stacca le cuffie dal jack per circa 10 s mentre parli. L'ascoltatore deve sentire silenzio (mai
+   rumore, mai il microfono del Mac); l'icona di fixomic segnala il microfono mancante.
+3. Riattacca le cuffie e parla: la voce deve riprendere da sola.
+
+**Punto 7, il pallino arancione.**
+1. In chiamata il pallino arancione del microfono è acceso nella barra dei menu.
+2. Chiudi Discord del tutto con ⌘Q e guarda il pallino: deve spegnersi entro circa 3 s (11b ha
+   misurato 3,2–3,3 s per la chiusura del microfono).
