@@ -91,12 +91,28 @@ components:
     typography: "{typography.caption}"
     rounded: "{rounded.notice}"
     padding: "8pt 12pt"
+  segmented-track:
+    backgroundColor: "{colors.hover-light}"
+    rounded: "{rounded.button}"
+    height: "24pt"
+  segmented-selected:
+    backgroundColor: "{colors.control-light}"
+    textColor: "{colors.ink-light}"
+    typography: "{typography.caption}"
+    rounded: "{rounded.button}"
+  choice-row:
+    textColor: "{colors.ink-light}"
+    typography: "{typography.body}"
+    height: "28pt"
+  choice-row-hover:
+    backgroundColor: "{colors.hover-light}"
 ---
 
 # Design System: fixomic
 
-Source of truth: `src/ui/Theme.{h,cpp}` (palettes, fonts, switch and buttons) and
-`src/ui/MainPanel.{h,cpp}` (route strip, meters, notices, layout). Tokens above give the light
+Source of truth: `src/ui/Theme.{h,cpp}` (palettes, fonts, switch and buttons),
+`src/ui/MainPanel.{h,cpp}` (route strip, meters, notices, layout), `src/ui/PanelParts.{h,cpp}` (choice
+list, segmented control), `src/ui/SettingsPanel.{h,cpp}` and `src/ui/Onboarding.{h,cpp}`. Tokens above give the light
 value; each `-dark` sibling is its dark counterpart. Rendered: `docs/screenshots/`.
 
 ## Overview
@@ -131,7 +147,9 @@ Restrained, cool neutrals from a single stepped ramp per appearance, four state 
 - **Line Slate** (#6a727e / #7f8692): Idle, Starting, waiting for a permission prompt.
 - **Line Amber** (#b87900 / #f0b43c): global bypass; also the tint of warning notices (degraded).
 - **Line Red** (#d2342b / #ff6259): MicMissing, DriverMissing, UnsupportedSampleRate, Error; a
-  clipping meter; the closed station and its label; a plugin that could not be added (picker).
+  clipping meter; the closed station and its label; a plugin that could not be added (picker); in the
+  settings, a microphone without 48 kHz, a failed driver operation or login-item change; a blocked
+  (denied) step of the first-run guide.
 
 ### Neutral
 - **Cool Paper** (#f6f7f9) / **Night Platform** (#1b1e23): panel ground.
@@ -164,7 +182,8 @@ em dash "—" is the placeholder for a value not measured yet.
 ## Layout
 
 360 pt wide, 16 pt edges, height follows the content (≈ 400–430 pt; notices add rows, each plugin
-adds a 32 pt row, the plugin picker ≈ 650 pt). Order is
+adds a 32 pt row, the plugin picker ≈ 650 pt, the settings ≈ 620–680 pt, the first-run guide ≈ 280–
+360 pt). Order is
 fixed by the spec: state sentence + bypass switch, route strip, notices, levels, echo
 cancellation, chain, latency, footer (Impostazioni… left, Esci right, text aligned to the content
 edges). Groups are separated by 12 pt, a 1 px hairline, 12 pt. Labels left, controls and values
@@ -197,7 +216,8 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
   at 5 % / 10 %.
 - **Flat button** (`fixomic.style = flat`): text only; hover fill = hover step.
 - **Notice** (`NoticeRow`): amber tint (13 % light / 16 % dark) at 8 pt radius, caption text, an
-  "Apri Impostazioni" push button when a System Settings pane fixes it. More than two startup
+  "Apri Impostazioni" push button when a System Settings pane fixes it (a denied or silent system
+  audio tap; none when the tap could not be created). More than two startup
   warnings merge into one row ("N avvisi all’avvio: …") elided with "…" at three lines.
 - **Chain list** (`ChainList`): 32 pt rows in signal order, no boxes. Left to right: a drag handle
   (2 × 3 tertiary dots), the name (Body; secondary ink when bypassed, tertiary when missing; a click
@@ -217,6 +237,39 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
   caption status line under it ("Scansione in corso…", or "Impossibile caricare «nome»." in Line
   Red; why it failed goes to the log, never to the panel). The list's
   place says "Nessun plugin trovato", or invites a scan when the catalog is empty. Esc or ‹ go back.
+- **Settings** (`SettingsPanel`): "Impostazioni…" replaces the whole panel with it (never a window);
+  "‹ Impostazioni" header (Body Strong), then groups between hairlines: **Microfono** (Body Strong)
+  over a choice list of the input devices (the configured one checked; "<nome> — non collegato" in
+  secondary ink while unplugged) and, for a device with more than one input, "Canale" over a
+  segmented control; **Frequenza di campionamento** with "48 kHz" right-aligned in secondary ink
+  (information, not a control; the UnsupportedSampleRate sentence in Line Red under it) and
+  **Buffer** over a segmented control "64 · 1,3 ms | 128 · 2,7 ms | 256 · 5,3 ms"; **Avvio
+  all’accesso** with a switch (why it failed in Line Red under it); **Driver** with its status at the
+  right ("Installato · v0.1.0" / "Non installato"), push buttons "Installa driver" or "Aggiorna
+  driver (vX → vY)" and "Disinstalla driver", the latter confirmed inline (a caption sentence, then
+  "Disinstalla" / "Annulla"), one caption line for "Operazione in corso…" (buttons at 40 %), the
+  result, or the error in Line Red; **Permessi** with "Consentito / Negato / Non ancora chiesto" for
+  the microphone and "Consentito / Negato / Non noto / Probabilmente negato" for system audio (never
+  "denied" when unknown; a caption note says macOS does not tell), an "Apri Impostazioni di Sistema"
+  push button under each one not granted; then "Rivedi la configurazione iniziale" (flat). Esc or ‹
+  go back to the panel.
+- **First-run guide** (`Onboarding`): replaces the whole panel; "‹ Configurazione iniziale", a
+  caption line, then the four steps as a vertical route: 18 pt stations on a 2 pt track-coloured
+  line, each with a 2 pt ring of ground. Done = filled in ink with a ground check, what was set up
+  under the name in secondary caption; open = 2 pt ink ring with its number, the name in Body
+  Strong, its explanation in secondary caption and its actions (a push button: ask, open System
+  Settings, install, "Fine"; "Salta" flat after it; the microphone choice list for step 1); to do =
+  1.5 pt tertiary ring and number, name in secondary ink; blocked = Line Red disc with a ground "!".
+  Panel-only, no modal: it keeps the panel up while the app loses focus to a system prompt.
+- **Choice list** (`ChoiceList`): 28 pt rows reaching the flat inset past the content edges; a 1.6 pt
+  ink check at the content edge on the chosen row, the text 20 pt in (Body; secondary ink when
+  dimmed); the flat button's hover fill; rows are radio buttons for accessibility.
+- **Segmented control** (`SegmentedControl`): equal segments on a 24 pt track of the hover step, at
+  most four per line (more wrap); the chosen one raised in the push button's fill and 1 px edge,
+  caption text in ink, the others in secondary ink with the push button's hover overlay.
+- **Setup reminder**: while the guide is not done, the first notice reads "La configurazione
+  iniziale non è completa." with a "Completa la configurazione" push button (same amber tint: the
+  setup is degraded).
 - **Menu-bar icon** (`TrayIcon::iconImage`): template image, 20 pt at 2x, 1.5 pt strokes: filled
   microphone (active), outline (waiting), outline crossed by a bar with cut-outs (bypass), outline
   with a knocked-out "!" badge (problem).
