@@ -148,16 +148,19 @@ target_link_libraries(fixomic_app_lib
 )
 
 # ---- app bundle ------------------------------------------------------------
-# LSUIElement=true: menu-bar only, no Dock icon.
+# LSUIElement=true: menu-bar only, no Dock icon. LSMinimumSystemVersion = the deployment target,
+# so Finder refuses the app on an older macOS instead of letting it crash at launch.
 # JUCE parses PLIST_TO_MERGE as a full <plist><dict> document and merges it into Info.plist.
-set(FIXOMIC_PLIST_ENTRIES [=[<plist>
+string(CONFIGURE [=[<plist>
   <dict>
     <key>LSUIElement</key>
     <true/>
+    <key>LSMinimumSystemVersion</key>
+    <string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
     <key>NSAudioCaptureUsageDescription</key>
     <string>fixomic ascolta l'audio di sistema per riconoscere e cancellare l'eco che rientra nel microfono.</string>
   </dict>
-</plist>]=])
+</plist>]=] FIXOMIC_PLIST_ENTRIES @ONLY)
 
 juce_add_gui_app(fixomic
     PRODUCT_NAME "fixomic"
@@ -179,7 +182,12 @@ target_compile_definitions(fixomic PRIVATE
 # Code signing. Ad-hoc signatures change with every build, and macOS then asks for the microphone
 # and system-audio permissions again; a stable identity keeps the grants across rebuilds. Default:
 # the first "Apple Development" identity in the keychain, else ad-hoc ("-"). The scan worker is
-# this same binary, so it is covered. Hardened runtime only outside Debug.
+# this same binary, so it is covered. Releases (scripts/package-release.sh) force ad-hoc.
+#
+# Hardened runtime only outside Debug and only with a real identity. An ad-hoc build is never
+# notarized, so the hardened runtime would buy nothing with Gatekeeper, and it would make plugin
+# loading depend on entitlements: AU / VST3 plugins from other vendors load into this process, and
+# some need JIT or unsigned executable memory on top of disable-library-validation.
 if(NOT DEFINED FIXOMIC_CODESIGN_IDENTITY)
     set(fixomic_default_identity "-")
     execute_process(COMMAND security find-identity -v -p codesigning
@@ -191,6 +199,11 @@ if(NOT DEFINED FIXOMIC_CODESIGN_IDENTITY)
         "Identity for codesign of fixomic.app (\"-\" = ad-hoc)")
 endif()
 message(STATUS "fixomic: signing with ${FIXOMIC_CODESIGN_IDENTITY}")
+if(FIXOMIC_CODESIGN_IDENTITY STREQUAL "-")
+    set(FIXOMIC_HARDENED_RUNTIME_FLAG "")
+else()
+    set(FIXOMIC_HARDENED_RUNTIME_FLAG "$<$<NOT:$<CONFIG:Debug>>:--options=runtime>")
+endif()
 
 # The HAL driver ships inside the app (Contents/Resources/fixomic.driver) for the in-app installer.
 # It is built separately by scripts/build-driver.sh (Xcode project, universal); without it the app
@@ -214,7 +227,7 @@ add_custom_command(TARGET fixomic POST_BUILD
 add_custom_command(TARGET fixomic POST_BUILD
     COMMAND codesign --force --timestamp=none --sign "${FIXOMIC_CODESIGN_IDENTITY}"
             --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/cmake/fixomic.entitlements"
-            "$<$<NOT:$<CONFIG:Debug>>:--options=runtime>"
+            ${FIXOMIC_HARDENED_RUNTIME_FLAG}
             "$<TARGET_BUNDLE_DIR:fixomic>"
     COMMAND_EXPAND_LISTS
     VERBATIM)

@@ -1,18 +1,22 @@
 #!/usr/bin/env bash
 # Builds the fixomic HAL driver (BlackHole v0.7.2, GPL-3.0, configured through its preprocessor
-# macros) as a Universal 2 bundle: build/driver/fixomic.driver
+# macros) as a Universal 2 bundle: build/driver/fixomic.driver (or $FIXOMIC_DRIVER_OUT_DIR, below)
 #
 # The submodule driver/BlackHole is never modified: it is copied to build/driver/src, the
 # patches in driver/patches/*.patch are applied to that copy (in lexical order), and the copy
 # is built with xcodebuild. Upstream branding is replaced (device icon driver/resources/fixomic.icns,
 # upstream README/CHANGELOG/VERSION/icon removed from Resources, version = fixomic's), then the
 # bundle is signed ad-hoc. The GPL-3.0 LICENSE stays in the bundle.
+#
+# FIXOMIC_DRIVER_OUT_DIR=<absolute dir>: build there instead of build/driver (used by
+# scripts/package-release.sh, so a release never touches the dev build).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 UPSTREAM="$ROOT/driver/BlackHole"
 PATCH_DIR="$ROOT/driver/patches"
-OUT_DIR="$ROOT/build/driver"
+OUT_DIR="${FIXOMIC_DRIVER_OUT_DIR:-$ROOT/build/driver}"
+[[ "$OUT_DIR" == /* ]] || { echo "error: FIXOMIC_DRIVER_OUT_DIR must be absolute: $OUT_DIR" >&2; exit 1; }
 SRC_DIR="$OUT_DIR/src"
 XCODE_OUT="$OUT_DIR/xcode"
 PRODUCT="$OUT_DIR/fixomic.driver"
