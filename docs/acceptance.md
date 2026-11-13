@@ -50,7 +50,7 @@ open -n "$APP" --args --set-aec 0       # cancellazione eco spenta (1: accesa), 
 | 2 | Utente che parla sopra il video: voce chiara, video non udibile | 11b (misura dell'eco) + Utente (voce, Discord) | misura dell'eco: vedi 1 · voce: da fare dall'utente |
 | 3 | Catena Gate + Nectar attiva: voce trattata | Utente (a orecchio) | da fare dall'utente |
 | 4 | Latenza mostrata ≤ 16 ms (AEC on) e ≤ 5 ms (AEC off), esclusi i plugin | 11b | ❌ 13/11: 29,1 ms (AEC on) e 10,2 ms (AEC off) con buffer 128; 7,5 ms AEC off con buffer 64 |
-| 5 | Sessione di 2 ore: nessun click, latenza mostrata invariata | 11b (registrazione) | da rifare: interrotto su richiesta dell'utente dopo 28,8 min (nessun click né buco in quei minuti, latenza 30,1 ms invariata) |
+| 5 | Sessione di 2 ore: nessun click, latenza mostrata invariata | 11b (registrazione) | ✅ 13/11: 2 ore intere, nessun click né buco da fixomic, latenza 30,10 ms invariata, stato *Attivo* per tutta la sessione |
 | 6 | Sleep/wake e cuffie staccate e riattaccate a metà chiamata: riprende da solo, silenzio durante il distacco | Utente | da fare dall'utente |
 | 7 | Discord chiuso: pallino arancione spento entro ~3 s | 11b (indicatore di richiesta) + Utente (pallino) | 11b ✅ 13/11: microfono chiuso dopo 3,18–3,32 s · pallino: da fare dall'utente |
 | — | Client VoiceProcessingIO (FaceTime, Discord): richiesta e audio | 11b | ✅ 13/11: Attivo in 0,25–0,27 s, audio ricevuto, In attesa 3,2–3,3 s dopo lo stop |
@@ -194,39 +194,46 @@ buchi di zeri dentro il segnale, ripetizioni di blocchi.
 **Atteso.** Nessun click, nessun buco e nessun drop-out nella registrazione. La latenza mostrata
 resta identica dall'inizio alla fine. Lo stato resta *Attivo*.
 
-**Esito.** Da rifare: la sessione è stata interrotta su richiesta dell'utente (13/11/2026, 03:19:
-niente suono in cuffia di notte). Risultato parziale dei minuti registrati:
+**Esito.** ✅ 13/11/2026, 08:31–10:32, 2 ore intere (7220 s registrati). Build Debug a `85035be`, con il
+driver reinstallato dopo la revisione finale. Una prima sessione, la notte prima, era stata interrotta
+dopo 28,8 min su richiesta dell'utente; nei minuti registrati non aveva trovato nessun problema.
 
 | Click / buchi trovati | Latenza: inizio → fine | Note |
 |---|---|---|
-| Nessuno in 28,8 min (27,2 min con il programma in cuffia): 0 buchi di zeri, 0 blocchi ripetuti, 0 salti nella linea del tempo. I 4 picchi segnalati dal rilevatore sono suoni presenti anche nel microfono crudo nello stesso istante | 30,1 ms → 30,1 ms (inizio, +10 min, +20 min; stesse parti: buffer 256, eco 910, plugin 47, dispositivi 168 + 64 campioni) | Stato *Attivo* per tutta la sessione, nessun riavvio dell'IO; da rifare per 2 ore intere |
+| Nessuno da fixomic: 0 buchi di zeri dentro il segnale, 0 blocchi ripetuti, 0 salti nella linea del tempo. I 32 picchi segnalati dal rilevatore sono il residuo della musica dopo la cancellazione dell'eco (vedi sotto) | 30,10 ms → 30,10 ms (12 letture, ogni 10 min; stesse parti: buffer 256, eco 910, plugin 47, dispositivi 168 + 64 campioni) | Stato *Attivo* per tutte le 2 ore, nessun avviso, nessun riavvio dell'IO; *In attesa* 3,2 s dopo la fine della registrazione |
 
-- Contatori dell'IO (`ioDiagnostics()`): stesso aggregato (376) dall'inizio, callback × 128 = frame a
-  ogni lettura, 48000,1 e 47999,9 frame/s tra le letture: nessuna callback persa, nessuna
+- **Contatori dell'IO** (`ioDiagnostics()`): lo stesso aggregato dall'inizio alla fine, callback × 128 = frame
+  a ogni lettura, tra 48000,2 e 48000,6 frame/s tra una lettura e l'altra. Nessuna callback persa, nessuna
   riapertura, nessun riavvio di Core Audio.
-- Il registratore su fixomic Mic ha ricevuto 82 939 392 frame (1727,9 s) in 1727,8 s, senza
-  discontinuità nel tempo dei campioni e senza sovraccarichi.
-- Lo scarto tra fixomic Mic e il microfono crudo segue la deriva tra i due orologi (circa 33 ppm) con
-  un residuo di 1,0 campioni RMS (massimo 2,4). Un buffer perso o ripetuto si vedrebbe come un salto
-  di almeno 128 campioni.
-- coreaudiod durante la sessione: 5,7% di CPU in media (il lavoro dell'IO), con un picco breve del
-  13–22% a +20 min; fixomic 5,3%, ControlCenter 0,6%.
+- **Il registratore.** Su fixomic Mic ha ricevuto 346 573 312 frame (7220,3 s) in 7220,0 s, sul microfono
+  crudo 7220,0 s in 7219,9 s: 0 discontinuità nel tempo dei campioni e 0 sovraccarichi su entrambi.
+- **I 32 picchi.** 30 cadono nel tratto di sola musica del programma (80–140 s del giro di 240 s) e si
+  ripetono negli stessi punti della musica a ogni giro: per esempio 105,3–105,7 s in quattro giri,
+  109,8–110,5 s in quattro, 119,1–119,2 s in due. Un click di fixomic, come un buffer perso, cadrebbe in
+  punti a caso; questi seguono gli attacchi secchi della musica. Sono piccoli: fixomic Mic intorno a
+  −58 dBFS. Nello stesso istante il microfono crudo ha la musica a −32 dBFS, con un transitorio più grande
+  (per esempio |d2| 0,048 contro 0,009). Gli altri 2 sono alla fine di un tratto di musica e voce (59,8 e
+  60,0 s del giro). È lo stesso fenomeno che 11b aveva visto a 1076,75 s nella prima sessione.
+- **Scarto tra fixomic Mic e microfono crudo.** Segue la deriva tra i due orologi, da 1,68 a 1,66
+  campioni/s (circa 35 ppm). Nelle 108 finestre affidabili il residuo di un andamento quadratico è di
+  10 campioni RMS e si sposta piano, da +4 a −23 campioni in 2 ore: è l'oscillazione lenta degli
+  orologi. Tra finestre affidabili consecutive non c'è nessun salto di 64 campioni o più; un buffer perso
+  o ripetuto sarebbe un gradino di almeno 128. Due finestre isolate a circa +600 campioni sono falsi
+  picchi sui toni tenuti della musica, e quelle accanto stanno sull'andamento.
+- **Servizi audio.** coreaudiod è rimasto al 5–6% di CPU a ogni controllo. Il controllo di sicurezza
+  (coreaudiod oltre il 30%) non è mai scattato.
 
-**Metodo (11b).**
-- `carec` registra per tutta la sessione fixomic Mic e il microfono crudo, mentre in cuffia gira in
-  loop un programma di 240 s: voce, musica, silenzi e rumore rosa. Cancellazione eco attiva, catena
-  *Nectar 4 Gate*.
-- Ogni 10 minuti: `--status` e `top`.
-- Analisi della registrazione:
+**Metodo (11b, rifatto dal controller).**
+- Un registratore Core Audio scritto per le misure (non incluso nel repository) registra per tutta la
+  sessione fixomic Mic e il microfono crudo. Intanto in cuffia gira in loop un programma di 240 s: voce,
+  musica, silenzi e rumore rosa. Cancellazione eco attiva, catena *Nectar 4 Gate*, buffer 128.
+- Ogni 10 minuti: `--status`, `top` e la CPU dei servizi audio.
+- Analisi della registrazione (script di misura, non inclusi nel repository):
   - picchi della derivata seconda oltre 12 volte il suo RMS locale, ciascuno confrontato con il
-    microfono crudo nello stesso istante;
+    microfono crudo nello stesso istante e con la sua posizione nel programma;
   - buchi di zeri esatti;
   - blocchi di 64–512 campioni ripetuti;
-  - lo scarto da fixomic Mic al microfono crudo, finestra per finestra.
-
-**Da rifare.** Rifare la sessione intera di 2 ore quando il suono in cuffia non disturba nessuno:
-`run_soak.sh 7200` di 11b (in `task-11b-report.md`), oppure due ore di video in cuffia con Discord
-(o `ffmpeg`) che legge fixomic Mic, poi le stesse analisi.
+  - lo scarto da fixomic Mic al microfono crudo, in finestre di 5 s.
 
 ## 6. Sleep/wake e cuffie staccate a metà chiamata
 
