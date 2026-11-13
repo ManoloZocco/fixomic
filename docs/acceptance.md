@@ -39,7 +39,8 @@ open -n "$APP" --args --set-aec 0       # cancellazione eco spenta (1: accesa), 
 > `avfoundation` di ffmpeg 9.0.2 perde circa un buffer su cinque senza avvisare: con `-t 75` ha
 > scritto 60 s di audio in 76,6 s, anche dal microfono fisico, quindi non è fixomic. In più `-ac 1`
 > somma i due canali uguali di fixomic Mic (+3 dB). Per livelli e click 11b ha usato un registratore
-> Core Audio che scrive ogni frame (`carec`, vedi `task-11b-report.md`).
+> Core Audio che scrive ogni frame, scritto per queste misure (nelle note si chiama `carec`; non è
+> nel repository).
 
 ## Riepilogo
 
@@ -101,13 +102,14 @@ Misure 11b (programma di 60 s in cuffia, dettagli e metodo sotto):
 
 **Metodo (11b).** Programma di 60 s generato sul Mac: voce `say -v Alice` su un letto musicale di
 sintesi (ffmpeg `aevalsrc`), −14,7 LUFS come YouTube, suonato in cuffia con `afplay`. Quattro
-riprese: cancellazione attiva e spenta (`--set-aec 1|0`), con il gate escluso (`--bypass 0 1`) e
-con la catena attiva. In ogni ripresa `carec` registra insieme fixomic Mic (canale 0) e il microfono
-crudo: 6 s di silenzio, il programma, 6 s di silenzio. Il microfono crudo si allinea al programma per
-correlazione; fixomic Mic si allinea al microfono crudo seguendo la deriva tra i due orologi (33 ppm:
-fixomic Mic va col clock del driver, il microfono col codec). L'eco coerente è la potenza della
-registrazione prevedibile linearmente dal programma (spettri incrociati di Welch): il rumore della
-stanza non è coerente col programma, quindi resta fuori. `--status` a +20, +40 e +55 s per l'ERLE.
+riprese: cancellazione attiva e spenta (`--set-aec 1|0`), con il gate escluso (`--bypass 0 1`) e con
+la catena attiva. In ogni ripresa il registratore Core Audio registra insieme fixomic Mic (canale 0)
+e il microfono crudo: 6 s di silenzio, il programma, 6 s di silenzio. Il microfono crudo si allinea
+al programma per correlazione; fixomic Mic si allinea al microfono crudo seguendo la deriva tra i
+due orologi (33 ppm: fixomic Mic va col clock del driver, il microfono col codec). L'eco coerente è
+la potenza della registrazione prevedibile linearmente dal programma (spettri incrociati di Welch):
+il rumore della stanza non è coerente col programma, quindi resta fuori. `--status` a +20,
++40 e +55 s per l'ERLE.
 
 ## 2. Utente che parla sopra il video
 
@@ -176,11 +178,11 @@ in lettura (stato *Attivo*), dal `--status`:
 - Il pannello mostra le stesse cifre: *Latenza 30,1 ms*, *Buffer 5,3 · eco 19,0 · plugin 1,0 ·
   dispositivi 4,8 ms* (snapshot con AEC on, buffer 128).
 
-**Metodo (11b).** `carec` legge fixomic Mic per tutta la prova. Per ogni combinazione
-`--set-aec 1|0 --set-buffer 128|64`, 3 s di assestamento e poi `--status`, che ora stampa anche il
-dettaglio in campioni (`latency … : buffer, aec, plugins, input device, output device`). Ogni cambio
-riapre l'IO: il client riceve 0,35–0,39 s di silenzio (zeri), senza click. Poi `--snapshot` del
-pannello.
+**Metodo (11b).** Il registratore Core Audio legge fixomic Mic per tutta la prova. Per ogni
+combinazione `--set-aec 1|0 --set-buffer 128|64`, 3 s di assestamento e poi `--status`, che ora
+stampa anche il dettaglio in campioni (`latency … : buffer, aec, plugins, input device, output
+device`). Ogni cambio riapre l'IO: il client riceve 0,35–0,39 s di silenzio (zeri), senza click. Poi
+`--snapshot` del pannello.
 
 ## 5. Sessione di 2 ore
 
@@ -272,27 +274,29 @@ Tempi dal Ctrl-C (SIGINT) del client che legge fixomic Mic:
 | ffmpeg 1 | +0,075 s | +0,016 s | +3,240 s | +3,235 s |
 | ffmpeg 2 | +0,071 s | +0,025 s | +3,318 s | +3,312 s |
 | ffmpeg 3 | +0,061 s | +0,013 s | +3,186 s | +3,182 s |
-| carec | +0,034 s | +0,008 s | +3,275 s | +3,271 s |
+| registratore Core Audio | +0,034 s | +0,008 s | +3,275 s | +3,271 s |
 
 - La richiesta cade subito (8–25 ms); poi fixomic aspetta la grazia di progetto di 3,0 s
   (`EngineController::kStopGraceSeconds`), controllata dal timer di 200 ms, e chiude l'IO: il
   microfono fisico smette di girare 4–6 ms prima del log *In attesa*.
 - È "circa 3 s" come chiede il piano. Un limite stretto di 3,0 s non si può rispettare con questa
   grazia: si va oltre di 0,18–0,32 s ogni volta.
-- All'avvio del client fixomic va *Attivo* in 0,52–0,58 s con ffmpeg, 0,31 s con carec.
+- All'avvio del client fixomic va *Attivo* in 0,52–0,58 s con ffmpeg, 0,31 s con il registratore
+  Core Audio.
 
-**Metodo (11b).** `devtool poll` (Core Audio, ogni 5 ms, orologio del log di fixomic) segue
+**Metodo (11b).** Un piccolo strumento scritto per le misure (non nel repository) interroga Core
+Audio ogni 5 ms, con l'orologio del log di fixomic, e segue
 `kAudioDevicePropertyDeviceIsRunningSomewhere` di fixomic Mic e del microfono delle cuffie: è la
 proprietà che accende il pallino arancione. Client: `ffmpeg -f avfoundation -i ":fixomic Mic"`, 8 s,
-poi `kill -INT`; una quarta prova con `carec`. Lo stato *In attesa* viene dal log dell'app
-(`engine state -> Idle`).
+poi `kill -INT`; una quarta prova con il registratore Core Audio. Lo stato *In attesa* viene dal log
+dell'app (`engine state -> Idle`).
 
 ## Client VoiceProcessingIO (FaceTime, Discord)
 
-**Come.** *11b:* un piccolo programma apre fixomic Mic con l'unità audio `VoiceProcessingIO` di Apple
-(quella che usano FaceTime e molte app VoIP), con fixomic Mic scelto come dispositivo d'ingresso
-(`kAudioOutputUnitProperty_CurrentDevice`), e registra 10 s. Una volta in silenzio, una volta con il
-programma del punto 1 in cuffia.
+**Come.** *11b:* un piccolo programma, scritto per la prova e non nel repository, apre fixomic Mic
+con l'unità audio `VoiceProcessingIO` di Apple (quella che usano FaceTime e molte app VoIP), con
+fixomic Mic scelto come dispositivo d'ingresso (`kAudioOutputUnitProperty_CurrentDevice`), e
+registra 10 s. Una volta in silenzio, una volta con il programma del punto 1 in cuffia.
 
 **Atteso.** fixomic va *Attivo*, la registrazione ha segnale, e torna *In attesa* circa 3 s dopo la
 chiusura del programma.
