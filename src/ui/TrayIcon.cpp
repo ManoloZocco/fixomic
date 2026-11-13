@@ -106,9 +106,6 @@ TrayIcon::TrayIcon(AppController& app) : app_(app), window_(app) {
     window_.panel().onQuit = [this] {
         if (onQuit) onQuit();
     };
-    window_.panel().onOpenSettings = [this] {
-        if (onOpenSettings) onOpenSettings();
-    };
     setIconTooltip("fixomic");
     refreshStatus();
 }
@@ -149,6 +146,16 @@ MainPanel& TrayIcon::panel() { return window_.panel(); }
 void TrayIcon::showPanel() {
     refreshStatus();
     window_.showUnder(mac::statusItemScreenBounds(getNativeHandle()));
+}
+
+void TrayIcon::showOnboarding() {
+    window_.panel().showOnboarding();
+    showPanel();
+}
+
+void TrayIcon::showSettings() {
+    window_.panel().showSettings();
+    showPanel();
 }
 
 void TrayIcon::hidePanel() { window_.dismiss(); }

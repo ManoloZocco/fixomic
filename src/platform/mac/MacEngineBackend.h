@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace fixomic {
 class AecStage;
@@ -27,6 +28,14 @@ class SystemAudioTap;
 struct MicrophoneAccess {
     std::function<Permission()> status = microphonePermission;
     std::function<void(std::function<void(bool)>)> request = requestMicrophone;
+};
+
+// What a backend warning (onWarning) is about. Each one leaves the AEC without a working reference.
+enum class WarningKind {
+    SystemAudioDenied,        // the permission is denied: the IO opened without the tap
+    SystemAudioSilent,        // the tap delivers only silence while the Mac plays audio: probably denied
+    SystemAudioUnavailable,   // the tap, or the prompt's throwaway IO, could not be created (the prompt
+                              // may not have been shown)
 };
 
 // Where openIO() gets the System Audio Recording state (injectable for tests).
@@ -64,6 +73,8 @@ struct SystemAudioAccess {
 //   Unless the permission is known to be granted, a tap that delivers only digital silence for
 //     TapSilenceWatch::kSilentSeconds while the default output device is running raises onWarning
 //     ("probably denied"), once per open.
+//   requestMicrophone() / requestSystemAudio() (the first-run guide) share this state with openIO():
+//     a prompt raised by either is the one the other waits for, never a second one.
 //
 // Threading: main thread only. The AEC stage, chain and graph must outlive the backend; nothing
 // else may prepare them while the IO is open.
@@ -98,6 +109,19 @@ public:
     PendingPermission pendingPermission() const;
     const AggregateIO* io() const;     // diagnostics; nullptr when closed
 
+    // The permission prompts, for the first-run guide: raised here unless openIO() already raised
+    // them (or the other way round), then `done` runs once the user answered (main thread). At once
+    // when there is nothing to ask: the microphone already decided or answered; the system audio
+    // preflight known, or a prompt raised by this backend answered. The microphone prompt is raised
+    // at most once per backend; the system audio one again after a failed throwaway IO (ok = false).
+    void requestMicrophone(std::function<void(bool granted)> done);
+    void requestSystemAudio(std::function<void(bool ok)> done);
+    bool microphoneRequestPending() const;   // the microphone prompt raised here is up
+    bool systemAudioRequestPending() const;  // the System Audio Recording prompt raised here is up
+    // A System Audio Recording prompt raised here was answered (the outcome is unknown: the preflight
+    // stays stale in this process, see Permissions.h).
+    bool systemAudioAnswered() const;
+
     // The user answered the microphone prompt that openIO() raised. Main thread; re-evaluate the
     // engine (e.g. EngineController::onMicListChanged(), deferred).
     std::function<void(bool granted)> onMicrophonePermission;
@@ -108,8 +132,9 @@ public:
     std::function<void()> onSystemAudioPermission;
 
     // The tap could not be created, the system audio permission is denied, or the tap stays silent
-    // (permission probably denied): the IO runs without (working) echo cancellation. Main thread.
-    std::function<void(juce::String)> onWarning;
+    // (permission probably denied): the IO runs without (working) echo cancellation. The kind says
+    // which, the text says it in Italian. Main thread.
+    std::function<void(WarningKind, juce::String)> onWarning;
     // The aggregate reported a lost / reconfigured device (forward to EngineController::onDeviceLost,
     // which may call closeIO() from inside the handler). Main thread.
     std::function<void()> onDeviceLost;
@@ -129,6 +154,9 @@ private:
 
     // Applies the system audio permission to a tap request: false = do not open yet (`error` set).
     bool checkSystemAudio(bool& withTap, juce::String& error);
+    void askMicrophone();     // raises the microphone prompt, unless it was raised already
+    void askSystemAudio();    // raises the System Audio Recording prompt (not while one is up)
+    void warn(WarningKind, const juce::String&);
     void startSilenceWatch();
     void stopSilenceWatch();
 
@@ -138,9 +166,11 @@ private:
     std::function<Config()> configProvider_;
     MicrophoneAccess micAccess_;
     SystemAudioAccess audioAccess_;
-    bool micRequested_ = false;         // the prompt is raised at most once per backend
+    Request micRequest_ = Request::None;     // the microphone prompt: raised at most once per backend
+    std::vector<std::function<void(bool)>> micWaiters_;     // requestMicrophone() callers
     Request audioRequest_ = Request::None;   // the system audio prompt, until it was raised once
     juce::String audioRequestError_;         // why the last throwaway IO failed (Request::Failed)
+    std::vector<std::function<void(bool)>> audioWaiters_;   // requestSystemAudio() callers
     std::atomic<bool> refHeard_{false};      // set by the IO thread on a non-zero tap sample
     struct SilenceTimer;
     std::unique_ptr<SilenceTimer> silenceTimer_;

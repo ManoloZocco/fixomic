@@ -124,6 +124,14 @@ juce::Font Theme::font(TextStyle style) {
     return system("Regular", 13.0f);
 }
 
+int Theme::pushButtonWidth(const juce::String& text) {
+    return juce::GlyphArrangement::getStringWidthInt(font(TextStyle::Caption), text) + 2 * 10 + 2;
+}
+
+int Theme::flatButtonWidth(const juce::String& text) {
+    return juce::GlyphArrangement::getStringWidthInt(font(TextStyle::Body), text) + 2 * kFlatTextInset;
+}
+
 void Theme::darkModeSettingChanged() {
     apply();
     auto& desktop = juce::Desktop::getInstance();
@@ -265,6 +273,12 @@ void TextBlock::setText(const juce::String& text) {
 }
 
 const juce::String& TextBlock::text() const { return text_; }
+
+void TextBlock::setStyle(TextStyle style) {
+    if (style == style_) return;
+    style_ = style;
+    repaint();
+}
 
 void TextBlock::setInk(Ink ink) {
     if (ink == ink_) return;

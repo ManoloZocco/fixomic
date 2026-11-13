@@ -1,8 +1,10 @@
 #pragma once
 
 #include "ui/ChainList.h"
+#include "ui/Onboarding.h"
 #include "ui/PanelParts.h"
 #include "ui/PluginPicker.h"
+#include "ui/SettingsPanel.h"
 #include "ui/StatusModel.h"
 #include "ui/Theme.h"
 
@@ -20,18 +22,23 @@ class AppController;
 namespace fixomic::ui {
 
 // The menu-bar panel, ~360 pt wide, rows in the spec's order: state sentence + global bypass
-// switch and the route strip; notices (backend warning, plugins not restored); input / output
-// levels; echo cancellation switch + echo removed; the chain section; total latency with its
-// breakdown; settings entry (10c) and quit.
+// switch and the route strip; notices ("Completa la configurazione" while the first-run guide is not
+// done, the backend warning, plugins not restored); input / output levels; echo cancellation switch
+// + echo removed; the chain section; total latency with its breakdown; "Impostazioni…" and quit.
 //
 // The chain section is "Catena" over the ChainList, or the PluginPicker in its place while a plugin
 // is being added ("+ Aggiungi plugin"; back, Escape or a plugin added return to the list). Chain
 // edits go to the AppController, and the section re-reads the chain right after each one
 // (asynchronously, never from inside the row that asked).
 //
-// Refresh: refresh() re-reads the model on AppController::onModelChanged; a 30 Hz timer updates
-// only the meters (and the echo-removed value, the AEC's meter), and only while setLive(true).
-// Message thread only.
+// Two views take the whole panel's place, each with its own back control: the SettingsPanel
+// ("Impostazioni…") and the Onboarding (on first launch, from the reminder row, from the settings'
+// "Rivedi la configurazione iniziale"). Their intents go to the AppController; "Fine" sets
+// Config.onboardingDone, closing the guide early leaves it false.
+//
+// Refresh: refresh() re-reads the model on AppController::onModelChanged (and the open view's data);
+// a 30 Hz timer updates only the meters (and the echo-removed value, the AEC's meter), and only while
+// setLive(true). Message thread only.
 class MainPanel : public juce::Component, private juce::Timer {
 public:
     static constexpr int kWidth = 360;
@@ -61,7 +68,24 @@ public:
     // the AppController's (the snapshot command's demo chain); the next refresh() shows the app's.
     void showChain(std::vector<PluginChain::SlotInfo> slots, const LatencyBreakdown& latency);
 
-    std::function<void()> onOpenSettings;           // 10c; until then the button does nothing visible
+    // The views in the panel's place. closePage() goes one step back (the guide to where it was
+    // opened from, the settings to the panel) and returns whether one was open.
+    enum class Page { Main, Settings, Onboarding };
+    void showSettings();
+    void showOnboarding();
+    bool closePage();
+    Page page() const;
+    SettingsPanel& settings();
+    Onboarding& onboarding();
+    // Re-reads the open view's data (devices, permissions, driver, login item): on every refresh(),
+    // and when the window becomes active again (a prompt or System Settings may have changed them).
+    void refreshPage();
+    // Stay up when the app loses focus (to a system prompt, the administrator dialog, System Settings
+    // opened from the panel): while the guide is open, or a driver operation started in the settings
+    // runs.
+    bool holdsOpen() const;
+    bool showsSetupReminder() const;   // the "Completa la configurazione" row
+
     std::function<void()> onQuit;
     std::function<void()> onPreferredHeightChanged; // the window follows preferredHeight()
 
@@ -80,6 +104,14 @@ private:
     void scrollIntoView(const juce::Component&);
     void updateRoute();                          // from status_ and the chain list's slots
     void showLatency(const LatencyBreakdown&);
+    void setPage(Page);
+    void updateVisibility();                     // the page's components, the picker or the list
+    void releaseFocus(juce::Component& leaving); // to the window, before `leaving` hides
+    void wirePages();
+    DriverFacts driverFacts() const;
+    SettingsPanel::Data settingsData() const;
+    Onboarding::Data onboardingData() const;
+    void chooseDevice(const DeviceChoice&);
 
     AppController& app_;
     StatusPresentation status_;
@@ -91,6 +123,8 @@ private:
     juce::ToggleButton bypassSwitch_;
     RouteStripView route_;
 
+    std::unique_ptr<NoticeRow> setupRow_;   // "Completa la configurazione"
+    bool setupReminder_ = false;
     std::vector<Notice> notices_;
     std::vector<std::unique_ptr<NoticeRow>> noticeRows_;
 
@@ -115,6 +149,11 @@ private:
 
     juce::TextButton settingsButton_;
     juce::TextButton quitButton_;
+
+    SettingsPanel settings_;
+    Onboarding onboarding_;
+    Page page_ = Page::Main;
+    Page onboardingBack_ = Page::Main;   // where the guide's back control goes
 };
 
 // Where the panel window goes: centred under `anchor` (the menu-bar icon; under `mouse` when
@@ -126,8 +165,9 @@ juce::Rectangle<int> panelWindowBounds(std::optional<juce::Rectangle<int>> ancho
 
 // The borderless, rounded, shadowed window the panel lives in, under the menu-bar icon, like the
 // system's menu-bar extras: it hides itself on Esc (an Esc first cancels a drag in the chain list,
-// then closes the plugin picker, if either is going on) and when it stops being the active window
-// (a click elsewhere); it reopens on the chain list.
+// then closes the plugin picker, then the settings or the guide, if any is going on) and when it stops
+// being the active window (a click elsewhere), unless the panel holds it open (holdsOpen()); it
+// reopens on the chain list. Becoming active again re-reads the open view's data.
 // Never taller than the display (panelWindowBounds): a longer panel (a long chain) scrolls.
 class MainPanelWindow : public juce::TopLevelWindow {
 public:
@@ -142,6 +182,9 @@ public:
     // A click on the icon that made the panel lose focus arrives right after the dismissal: it
     // must close the panel, not reopen it.
     bool dismissedJustNow() const;
+    // The window became active (re-read the open view's data) or stopped being it (hide, unless the
+    // panel holds it open). Called by activeWindowStatusChanged().
+    void activeStatusChanged(bool active);
 
     static constexpr double kReopenGuardMs = 300.0;
 

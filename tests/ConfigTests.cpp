@@ -10,11 +10,13 @@ namespace {
 Config makeSampleConfig() {
     Config c;
     c.inputDeviceUid = "X";
+    c.inputDeviceName = "Mic \"X\" & co";
     c.inputChannel = 1;
     c.bufferSize = 64;
     c.aecEnabled = false;
     c.globalBypass = true;
     c.launchAtLogin = true;
+    c.onboardingDone = true;
 
     PluginSlot a;
     a.descriptionXml = "<PLUGIN name=\"A &amp; B\" format=\"VST3\"/>";
@@ -32,11 +34,13 @@ Config makeSampleConfig() {
 void requireEqual(const Config& x, const Config& y) {
     REQUIRE(x.version == y.version);
     REQUIRE(x.inputDeviceUid == y.inputDeviceUid);
+    REQUIRE(x.inputDeviceName == y.inputDeviceName);
     REQUIRE(x.inputChannel == y.inputChannel);
     REQUIRE(x.bufferSize == y.bufferSize);
     REQUIRE(x.aecEnabled == y.aecEnabled);
     REQUIRE(x.globalBypass == y.globalBypass);
     REQUIRE(x.launchAtLogin == y.launchAtLogin);
+    REQUIRE(x.onboardingDone == y.onboardingDone);
     REQUIRE(x.chain.size() == y.chain.size());
     for (size_t i = 0; i < x.chain.size(); ++i) {
         REQUIRE(x.chain[i].descriptionXml == y.chain[i].descriptionXml);
@@ -59,6 +63,32 @@ TEST_CASE("round-trip preserves all fields") {
     REQUIRE(parsed.has_value());
     requireEqual(original, *parsed);
     REQUIRE(parsed->chain[0].state.getSize() == 3);
+}
+
+TEST_CASE("onboardingDone is stored, and false in a new config") {
+    REQUIRE_FALSE(Config{}.onboardingDone);
+    Config c;
+    c.inputDeviceUid = "mic";
+    c.onboardingDone = false;   // set up by hand, guide closed early: stays false
+    REQUIRE_FALSE(fromXmlString(toXmlString(c))->onboardingDone);
+    c.onboardingDone = true;
+    REQUIRE(fromXmlString(toXmlString(c))->onboardingDone);
+    REQUIRE(toXmlString(c).contains("onboardingDone=\"1\""));
+}
+
+TEST_CASE("a config written before the onboarding flag counts as onboarded once it was set up") {
+    // No flag: a chosen microphone or a chain means the user already set fixomic up by hand.
+    REQUIRE(fromXmlString("<FixomicConfig version=\"1\" inputDeviceUid=\"BuiltInMicrophoneDevice\"/>")->onboardingDone);
+    REQUIRE(fromXmlString("<FixomicConfig version=\"1\" inputDeviceUid=\"\"><Plugin description=\"x\"/></FixomicConfig>")
+                ->onboardingDone);
+    REQUIRE_FALSE(fromXmlString("<FixomicConfig version=\"1\" inputDeviceUid=\"\"/>")->onboardingDone);
+    REQUIRE_FALSE(fromXmlString("<FixomicConfig version=\"1\"/>")->onboardingDone);
+    // An explicit flag always wins.
+    REQUIRE_FALSE(fromXmlString("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\" onboardingDone=\"0\"/>")
+                      ->onboardingDone);
+    REQUIRE(fromXmlString("<FixomicConfig version=\"1\" onboardingDone=\"1\"/>")->onboardingDone);
+    // And no stored device name: "".
+    REQUIRE(fromXmlString("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\"/>")->inputDeviceName.isEmpty());
 }
 
 TEST_CASE("malformed xml returns nullopt") {

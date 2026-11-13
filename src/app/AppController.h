@@ -49,7 +49,9 @@ namespace fixomic {
 // PluginChain::saveState() when saving. The chain field of config() is owned by the controller:
 // it reflects the chain as last saved, and edits to it through updateConfig() are ignored.
 //
-// Never picks a microphone by itself: with no input selected the engine stays MicMissing.
+// Never picks a microphone by itself: with no input selected the engine stays MicMissing. The
+// configured one's name is stored with it (Config.inputDeviceName, shown while it is not connected);
+// a config written before names were stored learns it the first time the device is connected.
 //
 // Launch at login: Config.launchAtLogin is the user's choice, the login item (SMAppService) its
 // effect. setLaunchAtLogin() applies and then persists; at startup a choice of "on" whose item is
@@ -80,8 +82,10 @@ public:
     // the user", not a failure. None after a successful open or any other failure.
     PendingPermission pendingPermission() const;
     juce::String lastWarning() const;    // last backend warning (e.g. no system audio tap), "" if none
-    // The System Settings pane that fixes lastWarning(): every backend warning is about the system
-    // audio reference (tap not created, permission denied, tap silent). nullopt without a warning.
+    std::optional<mac::WarningKind> lastWarningKind() const;   // what it is about; nullopt without one
+    // The System Settings pane that fixes lastWarning(): the system audio pane for a denied or silent
+    // tap (ui::warningPane); nullopt for a tap that could not be created (opening a pane cannot fix
+    // it, and the prompt may not have been shown) and without a warning.
     std::optional<mac::PrivacyPane> lastWarningPane() const;
 
     // ---- config ------------------------------------------------------------------------------
@@ -128,6 +132,15 @@ public:
     using DriverCompletion = std::function<void(bool ok, juce::String error)>;
     mac::Permission microphonePermission() const;
     mac::Permission systemAudioPermission() const;   // NotDetermined also means "unknown"
+    // The prompts for the first-run guide, shared with the engine's own (MacEngineBackend): one
+    // prompt, whoever asks first. `done` runs later on the message thread (never inside the call,
+    // never after destruction): granted / ok = answered (the system audio outcome stays unknown, see
+    // Permissions.h). A notification follows each call (the pending state changed).
+    void requestMicrophone(std::function<void(bool granted)> done);
+    void requestSystemAudio(std::function<void(bool ok)> done);
+    bool microphoneRequestPending() const;
+    bool systemAudioRequestPending() const;
+    bool systemAudioAnswered() const;                // a System Audio Recording prompt was answered
     void openPrivacySettings(mac::PrivacyPane) const;
     bool driverInstalled() const;                    // installed and fixomic Mic published
     juce::String bundledDriverVersion() const;       // "" when the app carries no driver
@@ -162,6 +175,7 @@ private:
     void scheduleSave();
     void driverOperationDone(bool ok, const juce::String& error, int restartsBefore, const DriverCompletion&);
     void handleServiceRestart();
+    void rememberInputName();   // stores the configured microphone's name when it is not stored yet
 
     ConfigStore store_;
     Config config_;
@@ -182,6 +196,7 @@ private:
 
     std::vector<juce::String> startupWarnings_;
     juce::String lastWarning_;
+    std::optional<mac::WarningKind> lastWarningKind_;
     juce::String lastSaveError_;
     double firstUnsavedChange_ = -1.0;   // ms; -1 = nothing to save
     double lastChange_ = 0.0;

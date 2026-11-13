@@ -19,8 +19,9 @@
 // instance when the binary is launched again (JUCE passes a second launch's command line to
 // anotherInstanceStarted()); results go to the running instance's stderr:
 //
-//   --set-input <uid>           selects the microphone (the Settings panel replaces it), e.g.
+//   --set-input <uid>           selects the microphone, as the settings do, e.g.
 //                               --set-input BuiltInHeadphoneInputDevice
+//   --set-buffer <64|128|256>   sets the buffer size, as the settings do (applied at once)
 //   --status                    engine state, chain, latency, scan state, open IO, meters
 //   --list-effects              the catalog's effects
 //   --add-plugin <name> [fmt]   adds the first effect named <name> (format AudioUnit / VST3)
@@ -33,6 +34,8 @@
 //   --uninstall-driver          removes the installed driver (administrator dialog), result logged
 //   --launch-at-login <0|1>     registers / unregisters the login item
 //   --show-panel                opens the menu-bar panel, as a click on the icon does
+//   --show-settings             opens it on the settings
+//   --show-onboarding           opens it on the first-run guide
 //   --tray-menu                 opens the icon's right-click menu and logs whether it is still
 //                               open 1 s later
 //   --snapshot <dir>            renders into <dir>, at 2x, light and dark: the panel with the current
@@ -40,7 +43,10 @@
 //                               demo chain data, never the user's: a chain of four plugins, one
 //                               bypassed and one missing (chain-*.png), no plugins (chain-empty-*.png),
 //                               the plugin picker with a search typed (picker-*.png); their latency row
-//                               counts the demo chain's plugins. A relative <dir>
+//                               counts the demo chain's plugins. Then the settings and the first-run
+//                               guide with demo data (settings-*.png; onboarding-*.png, microphone done
+//                               and system audio open), and the settings with the real devices,
+//                               permissions and driver (settings-current-*.png). A relative <dir>
 //                               is resolved against the running instance's working directory (/ when
 //                               launched with `open`): pass an absolute one
 
@@ -76,10 +82,18 @@ void printStatus(AppController& app, ui::TrayIcon& tray) {
         + ", input " + app.config().inputDeviceUid + ", latency "
         + juce::String(app.latency().totalMs(), 2) + " ms, scanning " + (app.isScanning() ? "yes" : "no")
         + ", " + juce::String(app.effects().size()) + " effects, " + juce::String(app.catalog().blacklisted().size())
-        + " blacklisted");
+        + " blacklisted, buffer " + juce::String(app.config().bufferSize) + ", onboarding "
+        + (app.config().onboardingDone ? "done" : "not done"));
     const auto* panelWindow = tray.panel().getTopLevelComponent();
+    const auto page = tray.panel().page();
+    const char* pageName = page == ui::MainPanel::Page::Settings     ? "settings"
+                           : page == ui::MainPanel::Page::Onboarding ? "onboarding (step "
+                                                                       : "main";
     log("  icon at " + boundsText(fixomic::mac::statusItemScreenBounds(tray.getNativeHandle())) + ", panel "
         + (tray.isPanelShowing() ? "shown at " + panelWindow->getScreenBounds().toString() : juce::String("hidden"))
+        + " on " + pageName
+        + (page == ui::MainPanel::Page::Onboarding ? juce::String(tray.panel().onboarding().currentStep() + 1) + ")"
+                                                   : juce::String())
         + ", menu " + (tray.isMenuShowing() ? "open" : "closed"));
     const auto slots = app.slots();
     for (size_t i = 0; i < slots.size(); ++i)
@@ -135,6 +149,41 @@ std::vector<juce::PluginDescription> demoEffects() {
     return effects;
 }
 
+// Demo microphones for the settings and guide snapshots: one with two input channels, chosen.
+std::vector<ui::DeviceChoice> demoDevices() {
+    const std::vector<fixomic::mac::AudioDeviceInfo> devices{
+        {0, "demo-builtin", "Microfono MacBook Air", 1, {44100.0, 48000.0}},
+        {0, "demo-scarlett", "Scarlett 2i2 USB", 2, {44100.0, 48000.0, 96000.0}},
+        {0, "demo-iphone", "Microfono iPhone", 1, {48000.0}}};
+    return ui::deviceChoices(devices, "demo-scarlett", "Scarlett 2i2 USB");
+}
+
+// The settings with demo data: a driver update available, system audio unknown.
+ui::SettingsPanel::Data demoSettings() {
+    ui::SettingsPanel::Data data;
+    data.devices = demoDevices();
+    data.channel = 0;
+    data.bufferSize = 128;
+    data.launchAtLogin = true;
+    data.driver = {true, "0.1.0", "0.2.0", true, false};
+    data.microphone = fixomic::mac::Permission::Granted;
+    data.systemAudio = fixomic::mac::Permission::NotDetermined;
+    return data;
+}
+
+// The first-run guide at its second step: microphone done, system audio to ask, no driver yet.
+ui::Onboarding::Data demoOnboarding() {
+    ui::Onboarding::Data data;
+    data.devices = demoDevices();
+    data.driver = {false, {}, "0.1.0", false, false};
+    data.facts.microphone = fixomic::mac::Permission::Granted;
+    data.facts.microphoneChosen = true;
+    data.facts.systemAudio = fixomic::mac::Permission::NotDetermined;
+    data.facts.driverInstalled = false;
+    data.facts.driverBundled = true;
+    return data;
+}
+
 // The latency of `chain` with the app's buffer, AEC and devices: the latency row of a demo panel
 // agrees with the chain it shows.
 fixomic::LatencyBreakdown demoLatency(AppController& app, const std::vector<fixomic::PluginChain::SlotInfo>& chain) {
@@ -149,8 +198,9 @@ void writeSnapshots(AppController& app, const ui::TrayIcon& tray, const juce::St
     const auto fit = [](ui::MainPanel& panel) {
         panel.setSize(ui::MainPanel::kWidth, panel.preferredHeight(ui::MainPanel::kWidth));
     };
-    ui::MainPanel panel(app), chain(app), emptyChain(app), picker(app);
-    for (auto* p : {&panel, &chain, &emptyChain, &picker}) {
+    ui::MainPanel panel(app), chain(app), emptyChain(app), picker(app), settings(app), settingsNow(app),
+        onboarding(app);
+    for (auto* p : {&panel, &chain, &emptyChain, &picker, &settings, &settingsNow, &onboarding}) {
         p->refresh(tray.status());
         fit(*p);
     }
@@ -161,14 +211,22 @@ void writeSnapshots(AppController& app, const ui::TrayIcon& tray, const juce::St
     picker.picker().setEffects(demoEffects());
     picker.picker().setScanning(false);
     picker.picker().setSearchText("eq");
-    for (auto* p : {&chain, &emptyChain, &picker}) fit(*p);
+    settings.showSettings();
+    settings.settings().setData(demoSettings());
+    settingsNow.showSettings();   // the app's own devices, permissions and driver
+    onboarding.showOnboarding();
+    onboarding.onboarding().setData(demoOnboarding());
+    for (auto* p : {&chain, &emptyChain, &picker, &settings, &settingsNow, &onboarding}) fit(*p);
     const auto icons = ui::createTrayIconSheet();
 
     const std::vector<ui::SnapshotTarget> targets{{"panel", &panel},
                                                   {"tray", icons.get()},
                                                   {"chain", &chain},
                                                   {"chain-empty", &emptyChain},
-                                                  {"picker", &picker}};
+                                                  {"picker", &picker},
+                                                  {"settings", &settings},
+                                                  {"onboarding", &onboarding},
+                                                  {"settings-current", &settingsNow}};
     juce::String error;
     for (const auto& file : ui::writeSnapshots(directory, targets, error)) log("snapshot " + file.getFullPathName());
     if (error.isNotEmpty()) log("snapshot failed: " + error);
@@ -186,7 +244,20 @@ bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& com
         const auto& arg = args[i];
         if (arg == "--set-input" && i + 1 < args.size()) {
             const auto uid = args[++i];
-            app.updateConfig([&](fixomic::Config& c) { c.inputDeviceUid = uid; });
+            juce::String name;
+            for (const auto& device : app.inputDevices())
+                if (device.uid == uid) name = device.name;
+            app.updateConfig([&](fixomic::Config& c) {
+                c.inputDeviceUid = uid;
+                c.inputDeviceName = name;
+                c.inputChannel = 0;
+            });
+        } else if (arg == "--set-buffer" && i + 1 < args.size()) {
+            const int size = intArg(++i);
+            if (size == 64 || size == 128 || size == 256)
+                app.updateConfig([size](fixomic::Config& c) { c.bufferSize = size; });
+            else
+                log("buffer size must be 64, 128 or 256");
         } else if (arg == "--status") {
             printStatus(app, tray);
         } else if (arg == "--list-effects") {
@@ -264,6 +335,12 @@ bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& com
         } else if (arg == "--show-panel") {
             tray.showPanel();
             log("panel shown");
+        } else if (arg == "--show-settings") {
+            tray.showSettings();
+            log("settings shown");
+        } else if (arg == "--show-onboarding") {
+            tray.showOnboarding();
+            log("onboarding shown");
         } else if (arg == "--snapshot" && i + 1 < args.size()) {
             writeSnapshots(app, tray, args[++i]);
         } else {
@@ -278,6 +355,8 @@ bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& com
 
 class FixomicApplication final : public juce::JUCEApplication {
 public:
+    static constexpr int kFirstRunDelayMs = 300;
+
     const juce::String getApplicationName() override { return JUCE_APPLICATION_NAME_STRING; }
     const juce::String getApplicationVersion() override { return JUCE_APPLICATION_VERSION_STRING; }
 
@@ -302,7 +381,6 @@ public:
 #if FIXOMIC_DEV_COMMANDS
         tray_->onMenuChanged = [](bool open) { log(open ? "tray menu open" : "tray menu closed"); };
 #endif
-        // tray_->onOpenSettings: the Settings panel (Task 10c).
 
         // The one model handler: the log, then the menu-bar icon and its panel.
         app_->onModelChanged = [this] {
@@ -310,6 +388,12 @@ public:
             if (tray_ != nullptr) tray_->modelChanged();
         };
         for (const auto& warning : app_->startupWarnings()) log("startup warning: " + warning);
+        // Until the first-run guide is done, the panel opens on it by itself, under the icon, once the
+        // app has finished launching (macOS ignores activation before).
+        if (!app_->config().onboardingDone)
+            juce::Timer::callAfterDelay(kFirstRunDelayMs, [safe = juce::Component::SafePointer<ui::TrayIcon>(tray_.get())] {
+                if (safe != nullptr) safe->showOnboarding();
+            });
 #if FIXOMIC_DEV_COMMANDS
         // Once the event loop runs: initialise() is called before the app finished launching, when
         // macOS ignores activation (--show-panel and --tray-menu activate the app).

@@ -74,6 +74,10 @@ public:
     // A flat button's text starts this far inside it: place the button this far outside the content
     // edge and its text lines up with it.
     static constexpr int kFlatTextInset = 8;
+    // The width that fits a button's text: a push button (caption text, 10 pt each side) or a flat
+    // one (body text, kFlatTextInset each side).
+    static int pushButtonWidth(const juce::String& text);
+    static int flatButtonWidth(const juce::String& text);
 
     // ---- LookAndFeel ------------------------------------------------------------------------
     void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
@@ -104,6 +108,7 @@ public:
 
     void setText(const juce::String&);
     const juce::String& text() const;
+    void setStyle(TextStyle);
     void setInk(Ink);
     // At most this many lines, the last one ending in "…" when the text is longer; 0 = all. The
     // accessible title keeps the whole text.

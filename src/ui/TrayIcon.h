@@ -30,6 +30,10 @@ public:
     const StatusPresentation& status() const;
 
     void showPanel();
+    // The panel opened on the first-run guide (at the first launch, until it is done) or on the
+    // settings.
+    void showOnboarding();
+    void showSettings();
     void hidePanel();
     void togglePanel();
     bool isPanelShowing() const;
@@ -43,7 +47,6 @@ public:
     static constexpr int kMenuDelayMs = 50;
 
     std::function<void()> onQuit;              // "Esci", from the menu or the panel
-    std::function<void()> onOpenSettings;      // the panel's settings entry (10c)
     std::function<void(bool open)> onMenuChanged;   // the menu opened / closed (diagnostics)
 
     // The template image of a state: 20 x 20 pt drawn at 2x, black on transparent (macOS tints it).

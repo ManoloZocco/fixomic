@@ -17,11 +17,13 @@ juce::String toXmlString(const Config& config) {
     juce::XmlElement root(kRootTag);
     root.setAttribute("version", config.version);
     root.setAttribute("inputDeviceUid", config.inputDeviceUid);
+    root.setAttribute("inputDeviceName", config.inputDeviceName);
     root.setAttribute("inputChannel", config.inputChannel);
     root.setAttribute("bufferSize", config.bufferSize);
     root.setAttribute("aecEnabled", config.aecEnabled);
     root.setAttribute("globalBypass", config.globalBypass);
     root.setAttribute("launchAtLogin", config.launchAtLogin);
+    root.setAttribute("onboardingDone", config.onboardingDone);
 
     for (const auto& slot : config.chain) {
         auto* plugin = root.createNewChildElement(kPluginTag);
@@ -42,6 +44,7 @@ std::optional<Config> fromXmlString(const juce::String& text) {
     Config config;
     config.version = root->getIntAttribute("version", defaults.version);
     config.inputDeviceUid = root->getStringAttribute("inputDeviceUid", defaults.inputDeviceUid);
+    config.inputDeviceName = root->getStringAttribute("inputDeviceName", defaults.inputDeviceName);
 
     const auto channel = root->getIntAttribute("inputChannel", defaults.inputChannel);
     config.inputChannel = channel >= 0 ? channel : defaults.inputChannel;
@@ -61,6 +64,10 @@ std::optional<Config> fromXmlString(const juce::String& text) {
         config.chain.push_back(std::move(slot));
     }
 
+    // Written before the flag existed: onboarded if it was set up (a microphone or a chain).
+    config.onboardingDone = root->hasAttribute("onboardingDone")
+                                ? root->getBoolAttribute("onboardingDone")
+                                : config.inputDeviceUid.isNotEmpty() || !config.chain.empty();
     return config;
 }
 

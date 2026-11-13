@@ -289,7 +289,7 @@ TEST_CASE("MacEngineBackend with a tap runs the AEC", "[backend][hardware]")
 {
     Engine e;
     std::vector<juce::String> warnings;
-    e.backend.onWarning = [&](juce::String w) { warnings.push_back(w); };
+    e.backend.onWarning = [&](mac::WarningKind, juce::String w) { warnings.push_back(w); };
     juce::String error;
     REQUIRE(e.backend.openIO(true, error));
     INFO(error.toStdString());
@@ -412,8 +412,12 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
     mac::MacEngineBackend backend{graph, aec, chain, [&] { return config; }, mic, audio};
     int answers = 0;
     std::vector<juce::String> warnings;
+    std::vector<mac::WarningKind> kinds;
     backend.onSystemAudioPermission = [&] { ++answers; };
-    backend.onWarning = [&](juce::String w) { warnings.push_back(w); };
+    backend.onWarning = [&](mac::WarningKind kind, juce::String w) {
+        kinds.push_back(kind);
+        warnings.push_back(w);
+    };
 
     juce::String error;
     SECTION("not determined: one prompt, then the tap is created as usual")
@@ -456,6 +460,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         REQUIRE(warnings.size() == 1);
         REQUIRE(warnings[0].startsWith("Audio di sistema non disponibile"));
         REQUIRE(warnings[0].contains("AudioHardwareCreateProcessTap failed"));
+        REQUIRE(kinds == std::vector<mac::WarningKind>{mac::WarningKind::SystemAudioUnavailable});
         REQUIRE(requests == 1);
 
         // The next open asks again (in the background) instead of creating the tap itself.
@@ -478,6 +483,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         REQUIRE(warnings.size() == 1);
         REQUIRE(warnings[0].startsWith("Permesso audio di sistema negato"));
         REQUIRE(warnings[0].contains("Registrazione schermo e audio di sistema"));
+        REQUIRE(kinds == std::vector<mac::WarningKind>{mac::WarningKind::SystemAudioDenied});
     }
     SECTION("granted: no prompt, no warning")
     {
@@ -487,4 +493,178 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         REQUIRE(requests == 0);
         REQUIRE(warnings.empty());
     }
+}
+
+// The first-run guide asks through the backend, so it and openIO() share one prompt: whoever asks
+// first raises it, the other waits for the same answer.
+TEST_CASE("MacEngineBackend raises the system audio prompt once for the guide and the engine", "[backend][permissions]")
+{
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph{aec, chain};
+    fixomic::Config config;
+    config.inputDeviceUid = "no-such-mic-uid";   // fails with "not found" once the aggregate is attempted
+
+    mac::Permission status = mac::Permission::NotDetermined;
+    int requests = 0;
+    std::function<void(bool, juce::String)> pendingCompletion;
+    mac::SystemAudioAccess audio{
+        [&] { return status; },
+        [&](std::function<void(bool, juce::String)> done) {
+            ++requests;
+            pendingCompletion = std::move(done);
+        },
+        [] { return false; }};
+    mac::MacEngineBackend::MicrophoneAccess mic{[] { return mac::Permission::Granted; }, nullptr};
+    mac::MacEngineBackend backend{graph, aec, chain, [&] { return config; }, mic, audio};
+    int engineAnswers = 0;
+    backend.onSystemAudioPermission = [&] { ++engineAnswers; };
+    std::vector<bool> guideAnswers;
+    const auto guide = [&](bool ok) { guideAnswers.push_back(ok); };
+    juce::String error;
+
+    SECTION("the guide first, then the engine opens: no second prompt")
+    {
+        REQUIRE_FALSE(backend.systemAudioRequestPending());
+        backend.requestSystemAudio(guide);
+        REQUIRE(requests == 1);
+        REQUIRE(backend.systemAudioRequestPending());
+        REQUIRE_FALSE(backend.systemAudioAnswered());
+        REQUIRE(guideAnswers.empty());
+
+        REQUIRE_FALSE(backend.openIO(true, error));   // waits for the guide's prompt
+        REQUIRE(error == mac::MacEngineBackend::kWaitingForSystemAudio);
+        REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::SystemAudio);
+        backend.requestSystemAudio(guide);           // asked again while it is up: waits too
+        REQUIRE(requests == 1);
+
+        pendingCompletion(true, {});
+        REQUIRE(guideAnswers == std::vector<bool>{true, true});
+        REQUIRE(engineAnswers == 1);                 // the engine re-evaluates
+        REQUIRE(backend.systemAudioAnswered());
+        REQUIRE_FALSE(backend.systemAudioRequestPending());
+        REQUIRE_FALSE(backend.openIO(true, error));  // with the tap, as usual
+        REQUIRE(error.contains("not found"));
+        REQUIRE(requests == 1);
+
+        backend.requestSystemAudio(guide);           // answered: at once, no prompt
+        REQUIRE(guideAnswers.size() == 3);
+        REQUIRE(guideAnswers.back());
+        REQUIRE(requests == 1);
+    }
+    SECTION("the engine first, then the guide: it waits for the engine's prompt")
+    {
+        REQUIRE_FALSE(backend.openIO(true, error));
+        REQUIRE(requests == 1);
+        REQUIRE(backend.systemAudioRequestPending());
+        backend.requestSystemAudio(guide);
+        REQUIRE(requests == 1);
+        pendingCompletion(true, {});
+        REQUIRE(guideAnswers == std::vector<bool>{true});
+        REQUIRE(engineAnswers == 1);
+    }
+    SECTION("a failed throwaway IO: the guide hears it, and asking again raises a new prompt")
+    {
+        backend.requestSystemAudio(guide);
+        pendingCompletion(false, "AudioHardwareCreateAggregateDevice failed");
+        REQUIRE(guideAnswers == std::vector<bool>{false});
+        REQUIRE_FALSE(backend.systemAudioAnswered());
+        backend.requestSystemAudio(guide);
+        REQUIRE(requests == 2);
+        pendingCompletion(true, {});
+        REQUIRE(guideAnswers == std::vector<bool>{false, true});
+    }
+    SECTION("known to the preflight: nothing to ask")
+    {
+        for (const auto known : {mac::Permission::Granted, mac::Permission::Denied}) {
+            status = known;
+            backend.requestSystemAudio(guide);
+        }
+        REQUIRE(guideAnswers == std::vector<bool>{true, true});
+        REQUIRE(requests == 0);
+    }
+    SECTION("destroyed before the answer: no callback")
+    {
+        {
+            mac::MacEngineBackend shortLived{graph, aec, chain, [&] { return config; }, mic, audio};
+            shortLived.requestSystemAudio(guide);
+        }
+        pendingCompletion(true, {});
+        REQUIRE(guideAnswers.empty());
+    }
+}
+
+TEST_CASE("MacEngineBackend raises the microphone prompt once for the guide and the engine", "[backend][permissions]")
+{
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph{aec, chain};
+    fixomic::Config config;
+    config.inputDeviceUid = "no-such-mic-uid";
+
+    mac::Permission status = mac::Permission::NotDetermined;
+    int requests = 0;
+    std::function<void(bool)> pendingCompletion;
+    mac::MacEngineBackend::MicrophoneAccess access{[&] { return status; },
+                                                   [&](std::function<void(bool)> done) {
+                                                       ++requests;
+                                                       pendingCompletion = std::move(done);
+                                                   }};
+    mac::MacEngineBackend backend{graph, aec, chain, [&] { return config; }, access};
+    std::vector<bool> engineAnswers, guideAnswers;
+    backend.onMicrophonePermission = [&](bool granted) { engineAnswers.push_back(granted); };
+    const auto guide = [&](bool granted) { guideAnswers.push_back(granted); };
+    juce::String error;
+
+    backend.requestMicrophone(guide);
+    REQUIRE(requests == 1);
+    REQUIRE(backend.microphoneRequestPending());
+    REQUIRE_FALSE(backend.openIO(false, error));   // the engine waits for the same prompt
+    REQUIRE(error == mac::MacEngineBackend::kWaitingForMicrophone);
+    REQUIRE(requests == 1);
+
+    status = mac::Permission::Granted;
+    pendingCompletion(true);
+    REQUIRE(guideAnswers == std::vector<bool>{true});
+    REQUIRE(engineAnswers == std::vector<bool>{true});
+    REQUIRE_FALSE(backend.microphoneRequestPending());
+
+    backend.requestMicrophone(guide);   // answered: at once
+    REQUIRE(guideAnswers == std::vector<bool>{true, true});
+    REQUIRE(requests == 1);
+}
+
+// A new buffer size reaches the AEC and the plugins at the next open, while the IO is closed: the
+// prepares run before the HAL is reached, so a failing open shows them too.
+TEST_CASE("MacEngineBackend prepares the AEC and the plugins for a new buffer size at the next open",
+          "[backend][buffer]")
+{
+    using fixomic::test::TestPlugin;
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph{aec, chain};
+    fixomic::Config config;
+    config.inputDeviceUid = "no-such-mic-uid";
+    config.aecEnabled = false;
+    config.bufferSize = 128;
+    mac::MacEngineBackend::MicrophoneAccess mic{[] { return mac::Permission::Granted; }, nullptr};
+    mac::MacEngineBackend backend{graph, aec, chain, [&] { return config; }, mic};
+    chain.prepare(48000.0, 128);
+    chain.add(std::make_unique<TestPlugin>("counted", 1.0f));
+    auto* plugin = chain.pluginAt(0);
+    REQUIRE(plugin != nullptr);
+    juce::String error;
+
+    REQUIRE_FALSE(backend.openIO(false, error));
+    REQUIRE(error.contains("not found"));
+    const int afterFirst = TestPlugin::prepareCalls.load();
+    REQUIRE(plugin->getBlockSize() == 128);
+    REQUIRE_FALSE(backend.openIO(false, error));   // same size: not prepared again
+    REQUIRE(TestPlugin::prepareCalls.load() == afterFirst);
+
+    config.bufferSize = 256;
+    REQUIRE_FALSE(backend.openIO(false, error));
+    REQUIRE(TestPlugin::prepareCalls.load() == afterFirst + 1);
+    REQUIRE(plugin->getBlockSize() == 256);
+    REQUIRE(chain.pluginAt(0) == plugin);   // the same instance, state kept
 }

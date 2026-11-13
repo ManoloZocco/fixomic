@@ -28,12 +28,14 @@ void dim(juce::Component& component, bool dimmed) { component.setAlpha(dimmed ? 
 
 struct MainPanel::Layout {
     juce::Rectangle<int> statusText, bypassLabel, bypassSwitch, route;
+    juce::Rectangle<int> setupRow;
     std::vector<juce::Rectangle<int>> notices;
     juce::Rectangle<int> inputLabel, inputMeter, outputLabel, outputMeter, meterScale;
     juce::Rectangle<int> aecLabel, aecSwitch, erleLabel, erleValue;
     juce::Rectangle<int> chainTitle, chainBody;
     juce::Rectangle<int> latencyLabel, latencyValue, latencyDetail;
     juce::Rectangle<int> settingsButton, quitButton;
+    juce::Rectangle<int> page;   // the settings or the guide, in the panel's place
     std::vector<int> separators;
     int height = 0;
 };
@@ -102,9 +104,7 @@ MainPanel::MainPanel(AppController& app) : app_(app) {
         button->getProperties().set(Theme::kStyleProperty, Theme::kFlatStyle);
         button->setMouseClickGrabsKeyboardFocus(false);
     }
-    settingsButton_.onClick = [this] {
-        if (onOpenSettings) onOpenSettings();
-    };
+    settingsButton_.onClick = [this] { showSettings(); };
     quitButton_.onClick = [this] {
         if (onQuit) onQuit();
     };
@@ -115,6 +115,13 @@ MainPanel::MainPanel(AppController& app) : app_(app) {
              &chainList_, &latencyLabel_, &latencyValue_, &latencyDetail_, &settingsButton_, &quitButton_})
         addAndMakeVisible(c);
     addChildComponent(picker_);
+
+    setupRow_ = std::make_unique<NoticeRow>(utf8("La configurazione iniziale non \u00e8 completa."),
+                                            "Completa la configurazione", [this] { showOnboarding(); });
+    addChildComponent(*setupRow_);
+    addChildComponent(settings_);
+    addChildComponent(onboarding_);
+    wirePages();
 
     refresh(status_);
     setSize(kWidth, preferredHeight(kWidth));
@@ -147,6 +154,9 @@ void MainPanel::refresh(const StatusPresentation& status) {
 
     const auto notices = collectNotices(app_.lastWarning(), app_.lastWarningPane(), app_.startupWarnings());
     if (notices != notices_) rebuildNotices(notices);
+    setupReminder_ = !config.onboardingDone;
+    refreshPage();
+    updateVisibility();
 
     updateMeters();
     heightMayHaveChanged();
@@ -159,7 +169,8 @@ void MainPanel::rebuildNotices(const std::vector<Notice>& notices) {
     noticeRows_.clear();
     for (const auto& notice : notices_) {
         auto row = std::make_unique<NoticeRow>(notice, [this](mac::PrivacyPane pane) { app_.openPrivacySettings(pane); });
-        addAndMakeVisible(*row);
+        addChildComponent(*row);
+        row->setVisible(page_ == Page::Main);
         noticeRows_.push_back(std::move(row));
     }
 }
@@ -223,13 +234,12 @@ void MainPanel::refreshChainSoon() {
 }
 
 void MainPanel::showPicker() {
+    if (page_ != Page::Main) setPage(Page::Main);
     if (!pickerOpen_) {
         pickerOpen_ = true;
         picker_.reset();
         refreshChain();
-        chainTitle_.setVisible(false);
-        chainList_.setVisible(false);
-        picker_.setVisible(true);
+        updateVisibility();
         heightMayHaveChanged();
         resized();
     }
@@ -240,24 +250,191 @@ void MainPanel::showPicker() {
 bool MainPanel::closePicker() {
     if (!pickerOpen_) return false;
     pickerOpen_ = false;
-    // The search field has the keyboard focus: hand it to the window first. Hidden with the focus,
-    // the picker would pass it to this panel, which gives it to its first focusable control, the
-    // global bypass switch, and Return (just pressed to add a plugin) would turn processing off.
-    if (picker_.hasKeyboardFocus(true)) {
-        auto* window = getTopLevelComponent();
-        if (window != this && window->getWantsKeyboardFocus())
-            window->grabKeyboardFocus();
-        else
-            picker_.giveAwayKeyboardFocus();
-    }
-    picker_.setVisible(false);
+    releaseFocus(picker_);
+    updateVisibility();
     picker_.reset();
-    chainTitle_.setVisible(true);
-    chainList_.setVisible(true);
     heightMayHaveChanged();
     resized();
     return true;
 }
+
+// Hidden with the keyboard focus, a view would pass it to this panel, which gives it to its first
+// focusable control, the global bypass switch, and Return (just pressed in the view) would turn
+// processing off: the window takes it first.
+void MainPanel::releaseFocus(juce::Component& leaving) {
+    if (!leaving.hasKeyboardFocus(true)) return;
+    auto* window = getTopLevelComponent();
+    if (window != this && window->getWantsKeyboardFocus())
+        window->grabKeyboardFocus();
+    else
+        leaving.giveAwayKeyboardFocus();
+}
+
+void MainPanel::updateVisibility() {
+    const bool main = page_ == Page::Main;
+    for (juce::Component* c : std::initializer_list<juce::Component*>{
+             &statusText_, &bypassLabel_, &bypassSwitch_, &route_, &inputLabel_, &outputLabel_, &inputMeter_,
+             &outputMeter_, &meterScale_, &aecLabel_, &aecSwitch_, &erleLabel_, &erleValue_, &latencyLabel_,
+             &latencyValue_, &latencyDetail_, &settingsButton_, &quitButton_})
+        c->setVisible(main);
+    for (auto& row : noticeRows_) row->setVisible(main);
+    setupRow_->setVisible(main && setupReminder_);
+    chainTitle_.setVisible(main && !pickerOpen_);
+    chainList_.setVisible(main && !pickerOpen_);
+    picker_.setVisible(main && pickerOpen_);
+    settings_.setVisible(page_ == Page::Settings);
+    onboarding_.setVisible(page_ == Page::Onboarding);
+}
+
+// ---- settings and first-run guide -------------------------------------------------------------
+
+void MainPanel::wirePages() {
+    settings_.onClose = [this] { closePage(); };
+    settings_.onChooseDevice = [this](const DeviceChoice& device) { chooseDevice(device); };
+    settings_.onChooseChannel = [this](int channel) {
+        app_.updateConfig([channel](Config& c) { c.inputChannel = channel; });
+    };
+    // Applied at once: the engine reopens the IO, and the AEC and the plugins are prepared for the
+    // new size while it is closed (MacEngineBackend::openIO).
+    settings_.onChooseBuffer = [this](int size) { app_.updateConfig([size](Config& c) { c.bufferSize = size; }); };
+    settings_.onSetLaunchAtLogin = [this](bool enabled) {
+        juce::String error;
+        app_.setLaunchAtLogin(enabled, error);
+        refreshPage();   // the switch shows the system state
+        return error;
+    };
+    settings_.onInstallDriver = [this] {
+        app_.installDriver([safe = juce::Component::SafePointer<MainPanel>(this)](bool ok, juce::String error) {
+            if (safe != nullptr) safe->settings_.driverOperationFinished(ok, error);
+        });
+        refreshPage();   // in progress
+    };
+    settings_.onUninstallDriver = [this] {
+        app_.uninstallDriver([safe = juce::Component::SafePointer<MainPanel>(this)](bool ok, juce::String error) {
+            if (safe != nullptr) safe->settings_.driverOperationFinished(ok, error);
+        });
+        refreshPage();
+    };
+    settings_.onOpenPane = [this](mac::PrivacyPane pane) { app_.openPrivacySettings(pane); };
+    settings_.onReviewSetup = [this] { showOnboarding(); };
+
+    onboarding_.onClose = [this] { closePage(); };   // closed early: onboardingDone stays false
+    onboarding_.onRequestMicrophone = [this] {
+        // The answer re-evaluates the engine and notifies; the prompt's pending state shows at once.
+        app_.requestMicrophone([](bool) {});
+    };
+    onboarding_.onRequestSystemAudio = [this] { app_.requestSystemAudio([](bool) {}); };
+    onboarding_.onChooseDevice = [this](const DeviceChoice& device) { chooseDevice(device); };
+    onboarding_.onOpenPane = [this](mac::PrivacyPane pane) { app_.openPrivacySettings(pane); };
+    onboarding_.onInstallDriver = [this] {
+        app_.installDriver([safe = juce::Component::SafePointer<MainPanel>(this)](bool ok, juce::String error) {
+            if (safe != nullptr) safe->onboarding_.driverOperationFinished(ok, error);
+        });
+        refreshPage();
+    };
+    onboarding_.onFinish = [this] {
+        app_.updateConfig([](Config& c) { c.onboardingDone = true; });
+        closePage();
+    };
+}
+
+void MainPanel::chooseDevice(const DeviceChoice& device) {
+    app_.updateConfig([uid = device.uid, name = device.name](Config& c) {
+        c.inputDeviceUid = uid;
+        c.inputDeviceName = name;
+        c.inputChannel = 0;
+    });
+}
+
+DriverFacts MainPanel::driverFacts() const {
+    return {app_.driverInstalled(), app_.installedDriverVersion(), app_.bundledDriverVersion(),
+            app_.driverUpdateAvailable(), app_.driverOperationInProgress()};
+}
+
+SettingsPanel::Data MainPanel::settingsData() const {
+    const auto& config = app_.config();
+    SettingsPanel::Data data;
+    data.devices = deviceChoices(app_.inputDevices(), config.inputDeviceUid, config.inputDeviceName);
+    data.channel = config.inputChannel;
+    data.bufferSize = config.bufferSize;
+    data.launchAtLogin = app_.launchAtLogin();
+    data.driver = driverFacts();
+    data.microphone = app_.microphonePermission();
+    data.systemAudio = app_.systemAudioPermission();
+    data.warning = app_.lastWarningKind();
+    return data;
+}
+
+Onboarding::Data MainPanel::onboardingData() const {
+    const auto& config = app_.config();
+    Onboarding::Data data;
+    data.devices = deviceChoices(app_.inputDevices(), config.inputDeviceUid, config.inputDeviceName);
+    data.driver = driverFacts();
+    auto& f = data.facts;
+    f.microphone = app_.microphonePermission();
+    f.microphoneRequestPending = app_.microphoneRequestPending();
+    f.microphoneChosen = config.inputDeviceUid.isNotEmpty();
+    f.systemAudio = app_.systemAudioPermission();
+    f.systemAudioRequestPending = app_.systemAudioRequestPending();
+    f.systemAudioAnswered = app_.systemAudioAnswered();
+    f.warning = app_.lastWarningKind();
+    f.driverInstalled = data.driver.installed;
+    f.driverOperationInProgress = data.driver.operationInProgress;
+    f.driverBundled = data.driver.bundledVersion.isNotEmpty();
+    return data;
+}
+
+void MainPanel::refreshPage() {
+    switch (page_) {
+    case Page::Settings: settings_.setData(settingsData()); break;
+    case Page::Onboarding: onboarding_.setData(onboardingData()); break;
+    case Page::Main: break;
+    }
+}
+
+void MainPanel::showSettings() {
+    closePicker();
+    settings_.reset();
+    setPage(Page::Settings);
+}
+
+void MainPanel::showOnboarding() {
+    closePicker();
+    if (page_ != Page::Onboarding) onboardingBack_ = page_ == Page::Settings ? Page::Settings : Page::Main;
+    onboarding_.restart();
+    setPage(Page::Onboarding);
+}
+
+bool MainPanel::closePage() {
+    if (page_ == Page::Main) return false;
+    setPage(page_ == Page::Onboarding ? onboardingBack_ : Page::Main);
+    return true;
+}
+
+void MainPanel::setPage(Page page) {
+    if (page == page_) {
+        refreshPage();
+        return;
+    }
+    releaseFocus(*this);
+    page_ = page;
+    refreshPage();
+    updateVisibility();
+    heightMayHaveChanged();
+    resized();
+    repaint();
+    if (auto* viewport = findParentComponentOfClass<juce::Viewport>()) viewport->setViewPosition(0, 0);
+}
+
+MainPanel::Page MainPanel::page() const { return page_; }
+SettingsPanel& MainPanel::settings() { return settings_; }
+Onboarding& MainPanel::onboarding() { return onboarding_; }
+
+bool MainPanel::holdsOpen() const {
+    return page_ == Page::Onboarding || (page_ == Page::Settings && settings_.driverOperationStarted());
+}
+
+bool MainPanel::showsSetupReminder() const { return setupRow_->isVisible(); }
 
 bool MainPanel::isPickerOpen() const { return pickerOpen_; }
 
@@ -276,7 +453,7 @@ void MainPanel::scrollIntoView(const juce::Component& component) {
 }
 
 void MainPanel::childBoundsChanged(juce::Component* child) {
-    if (child != &chainList_ && child != &picker_) return;
+    if (child != &chainList_ && child != &picker_ && child != &settings_ && child != &onboarding_) return;
     heightMayHaveChanged();
     resized();   // the rows under the chain move; settles at once (same bounds, no new call)
 }
@@ -295,6 +472,17 @@ MainPanel::Layout MainPanel::layOut(int width) const {
     const int contentWidth = width - 2 * kPad;
     const int x = kPad;
     int y = 14;
+    // The views in the panel's place (and the chain section) reach past the content edges by the
+    // flat buttons' inset, so their text lines up with it.
+    const int sectionX = x - Theme::kFlatTextInset;
+    const int sectionWidth = contentWidth + 2 * Theme::kFlatTextInset;
+    if (page_ != Page::Main) {
+        const int h = page_ == Page::Settings ? settings_.heightForWidth(sectionWidth)
+                                              : onboarding_.heightForWidth(sectionWidth);
+        l.page = {sectionX, y, sectionWidth, h};
+        l.height = y + h + 14;
+        return l;
+    }
     const auto separator = [&] {
         y += kGroupGap;
         l.separators.push_back(y);
@@ -318,6 +506,11 @@ MainPanel::Layout MainPanel::layOut(int width) const {
     l.route = {x, y, contentWidth, RouteStripView::kHeight};
     y += RouteStripView::kHeight;
 
+    if (setupReminder_) {
+        y += 10;
+        l.setupRow = {x, y, contentWidth, setupRow_->heightForWidth(contentWidth)};
+        y += l.setupRow.getHeight();
+    }
     for (const auto& notice : noticeRows_) {
         y += 10;
         const int h = notice->heightForWidth(contentWidth);
@@ -345,10 +538,7 @@ MainPanel::Layout MainPanel::layOut(int width) const {
     row(l.erleLabel, l.erleValue, 80, 16);
     separator();
 
-    // Chain: "Catena" over the list, or the picker (with its own header) in their place. Both reach
-    // past the content edges by the flat buttons' inset, so their text lines up with it.
-    const int sectionX = x - Theme::kFlatTextInset;
-    const int sectionWidth = contentWidth + 2 * Theme::kFlatTextInset;
+    // Chain: "Catena" over the list, or the picker (with its own header) in their place.
     if (pickerOpen_) {
         l.chainBody = {sectionX, y, sectionWidth, picker_.heightForWidth(sectionWidth)};
     } else {
@@ -383,10 +573,16 @@ MainPanel::Layout MainPanel::layOut(int width) const {
 
 void MainPanel::resized() {
     const auto l = layOut(getWidth());
+    separators_ = l.separators;
+    if (page_ != Page::Main) {
+        (page_ == Page::Settings ? static_cast<juce::Component&>(settings_) : onboarding_).setBounds(l.page);
+        return;
+    }
     statusText_.setBounds(l.statusText);
     bypassLabel_.setBounds(l.bypassLabel.withTrimmedTop(4));
     bypassSwitch_.setBounds(l.bypassSwitch);
     route_.setBounds(l.route);
+    setupRow_->setBounds(l.setupRow);
     for (size_t i = 0; i < noticeRows_.size() && i < l.notices.size(); ++i) noticeRows_[i]->setBounds(l.notices[i]);
     inputLabel_.setBounds(l.inputLabel.withTrimmedTop(2));
     inputMeter_.setBounds(l.inputMeter);
@@ -404,7 +600,6 @@ void MainPanel::resized() {
     latencyDetail_.setBounds(l.latencyDetail);
     settingsButton_.setBounds(l.settingsButton);
     quitButton_.setBounds(l.quitButton);
-    separators_ = l.separators;
 }
 
 void MainPanel::paint(juce::Graphics& g) {
@@ -496,6 +691,7 @@ void MainPanelWindow::dismiss() {
     setVisible(false);
     panel_.chainList().cancelDrag();
     panel_.closePicker();   // it reopens on the chain
+    while (panel_.closePage()) {}   // and on the panel: the guide, closed early, is not done
     dismissedAt_ = nowMs();
 }
 
@@ -503,15 +699,23 @@ bool MainPanelWindow::dismissedJustNow() const { return nowMs() - dismissedAt_ <
 
 bool MainPanelWindow::keyPressed(const juce::KeyPress& key) {
     if (key == juce::KeyPress::escapeKey) {
-        // One step back per Escape: a drag in progress, then the plugin picker, then the panel.
-        if (!panel_.chainList().cancelDrag() && !panel_.closePicker()) dismiss();
+        // One step back per Escape: a drag in progress, the plugin picker, the settings or the guide,
+        // then the panel.
+        if (!panel_.chainList().cancelDrag() && !panel_.closePicker() && !panel_.closePage()) dismiss();
         return true;
     }
     return juce::TopLevelWindow::keyPressed(key);
 }
 
 void MainPanelWindow::activeWindowStatusChanged() {
-    if (isVisible() && !isActiveWindow()) dismiss();
+    if (isVisible()) activeStatusChanged(isActiveWindow());
+}
+
+void MainPanelWindow::activeStatusChanged(bool active) {
+    if (active)
+        panel_.refreshPage();   // back from a prompt or System Settings
+    else if (!panel_.holdsOpen())
+        dismiss();
 }
 
 } // namespace fixomic::ui

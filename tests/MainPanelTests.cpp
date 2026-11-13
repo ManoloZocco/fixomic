@@ -2,6 +2,7 @@
 
 #include "app/AppController.h"
 #include "ui/MainPanel.h"
+#include "core/Config.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -45,6 +46,14 @@ void pumpMessages(int ms) {
     while (juce::Time::getMillisecondCounter() < end) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
 }
 
+// Services it until `done` (true) or `ms` passed (false): asynchronous steps can queue behind the
+// panel's own refreshes.
+bool pumpUntil(const std::function<bool()>& done, int ms = 2000) {
+    const auto end = juce::Time::getMillisecondCounter() + static_cast<juce::uint32>(ms);
+    while (!done() && juce::Time::getMillisecondCounter() < end) CFRunLoopRunInMode(kCFRunLoopDefaultMode, 0.01, false);
+    return done();
+}
+
 juce::PluginDescription appleEffect(const char* name, const char* code) {
     juce::PluginDescription d;
     d.name = name;
@@ -86,6 +95,7 @@ struct PanelOnScreen {
     MainPanelWindow window{app};
 
     PanelOnScreen() {
+        app.onModelChanged = [this] { refresh(); };   // as the app does, through the tray icon
         window.addToDesktop();
         window.setTopLeftPosition(60, 120);
         window.setVisible(true);
@@ -135,7 +145,7 @@ struct PanelOnScreen {
 
 } // namespace
 
-TEST_CASE("Closing the plugin picker gives the keyboard focus back to the window", "[ui][panel]") {
+TEST_CASE("Closing the plugin picker gives the keyboard focus back to the window", "[ui][panel][gui]") {
     PanelOnScreen s;
     s.panel().showPicker();
     REQUIRE(s.panel().isPickerOpen());
@@ -158,7 +168,7 @@ TEST_CASE("Closing the plugin picker gives the keyboard focus back to the window
     }
 }
 
-TEST_CASE("Escape during a drag cancels the drag; the next one closes the panel", "[ui][panel]") {
+TEST_CASE("Escape during a drag cancels the drag; the next one closes the panel", "[ui][panel][gui]") {
     PanelOnScreen s;
     REQUIRE(s.app.addPlugin(appleEffect("AUDelay", "dely")).isEmpty());
     REQUIRE(s.app.addPlugin(appleEffect("AUBandpass", "bpas")).isEmpty());
@@ -188,7 +198,7 @@ TEST_CASE("Escape during a drag cancels the drag; the next one closes the panel"
     REQUIRE_FALSE(s.window.isVisible());
 }
 
-TEST_CASE("A plugin that cannot be loaded is reported in Italian; why goes to the log", "[ui][panel]") {
+TEST_CASE("A plugin that cannot be loaded is reported in Italian; why goes to the log", "[ui][panel][gui]") {
     REQUIRE(AppController::pluginLoadFailedText("Nectar 4 Gate") == utf8("Impossibile caricare «Nectar 4 Gate»."));
     REQUIRE(AppController::pluginLoadFailedText({}) == "Impossibile caricare il plugin.");
 
@@ -206,4 +216,122 @@ TEST_CASE("A plugin that cannot be loaded is reported in Italian; why goes to th
     REQUIRE(log.lines.size() == 1);
     REQUIRE(log.lines[0].contains("Bogus FX"));
     REQUIRE(log.lines[0].length() > juce::String("Bogus FX").length() + 20);
+}
+
+TEST_CASE("Impostazioni opens the settings in the panel; back and Escape return to it", "[ui][panel][gui]") {
+    PanelOnScreen s;
+    auto* settingsButton = findChild<juce::Button>(s.window, [](auto& b) { return b.getButtonText() == utf8("Impostazioni…"); });
+    REQUIRE(settingsButton != nullptr);
+    settingsButton->onClick();
+    REQUIRE(s.panel().page() == MainPanel::Page::Settings);
+    REQUIRE(s.panel().settings().isVisible());
+    REQUIRE_FALSE(s.bypassSwitch().isVisible());   // the view takes the panel's place
+    REQUIRE(s.panel().getHeight() == s.panel().preferredHeight(MainPanel::kWidth));
+
+    SECTION("Escape: back to the panel, the focus on the window, the panel still open") {
+        s.press(juce::KeyPress::escapeKey);
+        REQUIRE(s.panel().page() == MainPanel::Page::Main);
+        REQUIRE(s.bypassSwitch().isVisible());
+        REQUIRE(s.window.isVisible());
+        REQUIRE(juce::Component::getCurrentlyFocusedComponent() == &s.window);
+        s.press(juce::KeyPress::escapeKey);   // then the panel itself
+        REQUIRE_FALSE(s.window.isVisible());
+    }
+    SECTION("back") {
+        auto* back = findChild<juce::Button>(s.window, [](auto& b) { return b.getButtonText() == "Torna al pannello"; });
+        REQUIRE(back != nullptr);
+        back->onClick();
+        REQUIRE(s.panel().page() == MainPanel::Page::Main);
+    }
+    SECTION("dismissed: it reopens on the panel") {
+        s.window.dismiss();
+        REQUIRE(s.panel().page() == MainPanel::Page::Main);
+    }
+}
+
+TEST_CASE("The settings apply a buffer size and a microphone through the AppController", "[ui][panel][gui]") {
+    PanelOnScreen s;
+    s.panel().showSettings();
+    auto& settings = s.panel().settings();
+    REQUIRE(settings.data().bufferSize == 128);
+
+    // A new buffer size applies at once: the latency estimate follows (both directions).
+    auto* b256 = findChild<juce::Button>(settings, [](auto& b) { return b.getButtonText() == utf8("256 · 5,3 ms"); });
+    REQUIRE(b256 != nullptr);
+    b256->onClick();
+    REQUIRE(pumpUntil([&] { return s.app.config().bufferSize == 256; }));
+    REQUIRE(s.app.config().bufferSize == 256);
+    REQUIRE(s.app.latency().bufferFrames == 2 * 256);
+    REQUIRE(settings.data().bufferSize == 256);   // the view re-read it
+    REQUIRE(b256->getToggleState());
+
+    // A microphone: its uid and name, the first channel. (Not a real device: the engine stays
+    // MicMissing and opens nothing.)
+    s.app.updateConfig([](fixomic::Config& c) { c.inputChannel = 1; });
+    DeviceChoice choice;
+    choice.uid = "no-such-mic";
+    choice.name = "Microfono finto";
+    settings.onChooseDevice(choice);
+    REQUIRE(s.app.config().inputDeviceUid == "no-such-mic");
+    REQUIRE(s.app.config().inputDeviceName == "Microfono finto");
+    REQUIRE(s.app.config().inputChannel == 0);
+    // It is not connected: listed first, checked, as non collegato.
+    REQUIRE_FALSE(settings.data().devices.empty());
+    REQUIRE(settings.data().devices[0].text == utf8("Microfono finto — non collegato"));
+    REQUIRE(settings.data().devices[0].selected);
+}
+
+TEST_CASE("The first-run guide: Fine marks it done, closing it early does not", "[ui][panel][gui]") {
+    PanelOnScreen s;   // a new config: the guide is not done
+    REQUIRE_FALSE(s.app.config().onboardingDone);
+    REQUIRE(s.panel().showsSetupReminder());
+    auto* complete = findChild<juce::Button>(s.window, [](auto& b) { return b.getButtonText() == "Completa la configurazione"; });
+    REQUIRE(complete != nullptr);
+    complete->onClick();
+    REQUIRE(s.panel().page() == MainPanel::Page::Onboarding);
+    REQUIRE(s.panel().holdsOpen());
+
+    s.press(juce::KeyPress::escapeKey);   // closed early
+    REQUIRE(s.panel().page() == MainPanel::Page::Main);
+    REQUIRE_FALSE(s.app.config().onboardingDone);
+    REQUIRE(s.panel().showsSetupReminder());
+    REQUIRE_FALSE(s.panel().holdsOpen());
+
+    // From the settings, and back to them.
+    s.panel().showSettings();
+    auto* review = findChild<juce::Button>(s.window, [](auto& b) { return b.getButtonText() == "Rivedi la configurazione iniziale"; });
+    REQUIRE(review != nullptr);
+    review->onClick();
+    REQUIRE(s.panel().page() == MainPanel::Page::Onboarding);
+    auto& guide = s.panel().onboarding();
+    while (guide.currentStep() < kSetupStepCount - 1) guide.skip();   // whatever this Mac has done already
+    REQUIRE(guide.primaryButton().getButtonText() == "Fine");
+    guide.primaryButton().onClick();
+    REQUIRE(s.app.config().onboardingDone);
+    REQUIRE(s.panel().page() == MainPanel::Page::Settings);
+    s.panel().closePage();
+    REQUIRE_FALSE(s.panel().showsSetupReminder());
+    REQUIRE(s.app.saveNow());
+    REQUIRE(fixomic::fromXmlString(s.tmp.dir.getChildFile("config.xml").loadFileAsString())->onboardingDone);
+}
+
+// Focus loss itself is reported by JUCE only to a foreground app (not to this test process): the
+// window's response to it is driven directly.
+TEST_CASE("The panel stays up for the guide when the app loses the focus", "[ui][panel][gui]") {
+    PanelOnScreen s;
+    SECTION("the guide: held open (a prompt, the administrator dialog, System Settings)") {
+        s.panel().showOnboarding();
+        s.window.activeStatusChanged(false);
+        REQUIRE(s.window.isVisible());
+        REQUIRE(s.panel().page() == MainPanel::Page::Onboarding);
+        s.window.activeStatusChanged(true);   // back: re-read, still open
+        REQUIRE(s.window.isVisible());
+    }
+    SECTION("the settings and the panel: dismissed, as menu-bar extras are; reopened on the panel") {
+        s.panel().showSettings();
+        REQUIRE_FALSE(s.panel().holdsOpen());   // no driver operation started from them
+        s.window.activeStatusChanged(false);
+        REQUIRE_FALSE(s.window.isVisible());
+        REQUIRE(s.panel().page() == MainPanel::Page::Main);
+    }
 }

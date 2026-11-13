@@ -3,6 +3,7 @@
 #include "platform/mac/AggregateIO.h"
 #include "platform/mac/DriverInstaller.h"
 #include "platform/mac/LoginItem.h"
+#include "ui/SetupModel.h"
 
 #include <stdexcept>
 
@@ -33,6 +34,7 @@ AppController::AppController(Options options)
                       [this] {
                           post([](AppController& c) {
                               c.engine_.onMicListChanged();
+                              c.rememberInputName();
                               c.notify();   // the list of selectable microphones changed
                           });
                       }),
@@ -50,9 +52,10 @@ AppController::AppController(Options options)
     chain_.onChanged = [this] { post([](AppController& c) { c.changed(); }); };
     chain_.onPluginStateChanged = [this] { post([](AppController& c) { c.scheduleSave(); }); };
     windows_.onClosed = [this](juce::AudioPluginInstance&) { scheduleSave(); };
-    backend_.onWarning = [this](juce::String warning) {
-        post([warning](AppController& c) {
+    backend_.onWarning = [this](mac::WarningKind kind, juce::String warning) {
+        post([kind, warning](AppController& c) {
             c.lastWarning_ = warning;
+            c.lastWarningKind_ = kind;
             c.notify();
         });
     };
@@ -74,7 +77,10 @@ AppController::AppController(Options options)
     };
     engine_.onStateChanged = [this](EngineState state) {
         post([state](AppController& c) {
-            if (state == EngineState::Starting) c.lastWarning_.clear();   // a fresh open reports anew
+            if (state == EngineState::Starting) {   // a fresh open reports anew
+                c.lastWarning_.clear();
+                c.lastWarningKind_.reset();
+            }
             c.notify();
         });
     };
@@ -85,6 +91,7 @@ AppController::AppController(Options options)
     }
 
     engine_.setConfig(config_);
+    rememberInputName();
     demand_.start();
     startTimer(kTimerMs);
     scanPlugins();
@@ -108,6 +115,12 @@ void AppController::post(std::function<void(AppController&)> action) {
     juce::MessageManager::callAsync([weak = juce::WeakReference<AppController>(this), fn = std::move(action)] {
         if (auto* self = weak.get()) fn(*self);
     });
+}
+
+void AppController::rememberInputName() {
+    // A microphone chosen before names were stored: shown by name once it is unplugged.
+    if (const auto learned = ui::inputNameToRemember(inputDevices(), config_.inputDeviceUid, config_.inputDeviceName))
+        updateConfig([name = *learned](Config& c) { c.inputDeviceName = name; });
 }
 
 void AppController::handleServiceRestart() {
@@ -155,9 +168,11 @@ juce::String AppController::lastError() const { return engine_.lastError(); }
 PendingPermission AppController::pendingPermission() const { return backend_.pendingPermission(); }
 juce::String AppController::lastWarning() const { return lastWarning_; }
 
+std::optional<mac::WarningKind> AppController::lastWarningKind() const { return lastWarningKind_; }
+
 std::optional<mac::PrivacyPane> AppController::lastWarningPane() const {
-    if (lastWarning_.isEmpty()) return std::nullopt;
-    return mac::PrivacyPane::SystemAudio;
+    if (!lastWarningKind_) return std::nullopt;
+    return ui::warningPane(*lastWarningKind_);
 }
 
 // ---- config -----------------------------------------------------------------------------------
@@ -294,6 +309,30 @@ juce::String AppController::ioDiagnostics() const {
 
 mac::Permission AppController::microphonePermission() const { return mac::microphonePermission(); }
 mac::Permission AppController::systemAudioPermission() const { return mac::systemAudioPermission(); }
+
+void AppController::requestMicrophone(std::function<void(bool granted)> done) {
+    // The backend answers at once when there is nothing to ask: deferred either way, so the caller
+    // never hears back from inside its own call, and never after destruction.
+    backend_.requestMicrophone([weak = juce::WeakReference<AppController>(this), done](bool granted) {
+        juce::MessageManager::callAsync([weak, done, granted] {
+            if (weak.get() != nullptr && done) done(granted);
+        });
+    });
+    post([](AppController& c) { c.notify(); });   // the prompt is up: microphoneRequestPending()
+}
+
+void AppController::requestSystemAudio(std::function<void(bool ok)> done) {
+    backend_.requestSystemAudio([weak = juce::WeakReference<AppController>(this), done](bool ok) {
+        juce::MessageManager::callAsync([weak, done, ok] {
+            if (weak.get() != nullptr && done) done(ok);
+        });
+    });
+    post([](AppController& c) { c.notify(); });
+}
+
+bool AppController::microphoneRequestPending() const { return backend_.microphoneRequestPending(); }
+bool AppController::systemAudioRequestPending() const { return backend_.systemAudioRequestPending(); }
+bool AppController::systemAudioAnswered() const { return backend_.systemAudioAnswered(); }
 void AppController::openPrivacySettings(mac::PrivacyPane pane) const { mac::openPrivacySettings(pane); }
 bool AppController::driverInstalled() const { return mac::driverInstalled(); }
 juce::String AppController::bundledDriverVersion() const { return mac::bundledDriverVersion(); }

@@ -15,6 +15,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 namespace fixomic::mac {
 
@@ -113,13 +114,7 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
     switch (micAccess_.status ? micAccess_.status() : Permission::Granted) {
     case Permission::Granted: break;
     case Permission::NotDetermined:
-        if (!micRequested_ && micAccess_.request) {
-            micRequested_ = true;
-            micAccess_.request([this, alive = alive_](bool granted) {
-                if (*alive && onMicrophonePermission)
-                    onMicrophonePermission(granted);
-            });
-        }
+        askMicrophone();
         error = kWaitingForMicrophone;
         pending_ = PendingPermission::Microphone;
         return false;
@@ -153,8 +148,8 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
     if (withTap) {
         juce::String tapError;
         tap_ = SystemAudioTap::create(tapError);
-        if (!tap_ && onWarning)
-            onWarning(systemAudioUnavailableWarning(tapError));
+        if (!tap_)
+            warn(WarningKind::SystemAudioUnavailable, systemAudioUnavailableWarning(tapError));
     }
 
     // Without a tap the aggregate hands the callback a silent reference: pass none to the graph so
@@ -207,8 +202,7 @@ bool MacEngineBackend::checkSystemAudio(bool& withTap, juce::String& error)
     case Permission::Granted: return true;
     case Permission::Denied:
         withTap = false;
-        if (onWarning)
-            onWarning(systemAudioDeniedWarning());
+        warn(WarningKind::SystemAudioDenied, systemAudioDeniedWarning());
         return true;
     case Permission::NotDetermined: break;
     }
@@ -221,24 +215,96 @@ bool MacEngineBackend::checkSystemAudio(bool& withTap, juce::String& error)
         // would raise it on the main thread. This open goes without the tap; the next one asks again.
         audioRequest_ = Request::None;
         withTap = false;
-        if (onWarning)
-            onWarning(systemAudioUnavailableWarning(audioRequestError_));
+        warn(WarningKind::SystemAudioUnavailable, systemAudioUnavailableWarning(audioRequestError_));
         return true;
     }
-    if (audioRequest_ == Request::None) {
-        audioRequest_ = Request::Pending;
-        audioAccess_.request([this, alive = alive_](bool ok, juce::String requestError) {
-            if (!*alive)
-                return;
-            audioRequest_ = ok ? Request::Done : Request::Failed;
-            audioRequestError_ = requestError.isNotEmpty() ? requestError : juce::String("unknown error");
-            if (onSystemAudioPermission)
-                onSystemAudioPermission();   // re-evaluated at once: with the tap, or without it
-        });
-    }
-    error = kWaitingForSystemAudio;
+    if (audioRequest_ == Request::None)
+        askSystemAudio();
+    error = kWaitingForSystemAudio;   // raised here, or by requestSystemAudio(): waits for its answer
     pending_ = PendingPermission::SystemAudio;
     return false;
+}
+
+void MacEngineBackend::askMicrophone()
+{
+    if (micRequest_ != Request::None || !micAccess_.request)
+        return;
+    micRequest_ = Request::Pending;
+    micAccess_.request([this, alive = alive_](bool granted) {
+        if (!*alive)
+            return;
+        micRequest_ = Request::Done;
+        const auto waiters = std::exchange(micWaiters_, {});
+        if (onMicrophonePermission)
+            onMicrophonePermission(granted);
+        for (const auto& waiter : waiters)
+            if (waiter)
+                waiter(granted);
+    });
+}
+
+void MacEngineBackend::askSystemAudio()
+{
+    if (audioRequest_ == Request::Pending || !audioAccess_.request)
+        return;
+    audioRequest_ = Request::Pending;
+    audioAccess_.request([this, alive = alive_](bool ok, juce::String requestError) {
+        if (!*alive)
+            return;
+        audioRequest_ = ok ? Request::Done : Request::Failed;
+        audioRequestError_ = requestError.isNotEmpty() ? requestError : juce::String("unknown error");
+        const auto waiters = std::exchange(audioWaiters_, {});
+        if (onSystemAudioPermission)
+            onSystemAudioPermission();   // re-evaluated at once: with the tap, or without it
+        for (const auto& waiter : waiters)
+            if (waiter)
+                waiter(ok);
+    });
+}
+
+void MacEngineBackend::requestMicrophone(std::function<void(bool granted)> done)
+{
+    const auto status = micAccess_.status ? micAccess_.status() : Permission::Granted;
+    if (status != Permission::NotDetermined || !micAccess_.request || micRequest_ == Request::Done) {
+        if (done)
+            done(status == Permission::Granted);
+        return;
+    }
+    micWaiters_.push_back(std::move(done));
+    askMicrophone();
+}
+
+void MacEngineBackend::requestSystemAudio(std::function<void(bool ok)> done)
+{
+    const auto status = audioAccess_.status ? audioAccess_.status() : Permission::Granted;
+    if (status != Permission::NotDetermined || !audioAccess_.request || audioRequest_ == Request::Done) {
+        if (done)
+            done(true);   // nothing to ask: known to the preflight, or answered in this process
+        return;
+    }
+    audioWaiters_.push_back(std::move(done));
+    askSystemAudio();   // unless openIO() raised it already: then its answer is this one's
+}
+
+bool MacEngineBackend::microphoneRequestPending() const
+{
+    return micRequest_ == Request::Pending;
+}
+
+bool MacEngineBackend::systemAudioRequestPending() const
+{
+    return audioRequest_ == Request::Pending;
+}
+
+bool MacEngineBackend::systemAudioAnswered() const
+{
+    return audioRequest_ == Request::Done;
+}
+
+void MacEngineBackend::warn(WarningKind kind, const juce::String& text)
+{
+    if (onWarning)
+        onWarning(kind, text);
 }
 
 void MacEngineBackend::startSilenceWatch()
@@ -253,8 +319,8 @@ void MacEngineBackend::startSilenceWatch()
         // Main queue; the timer is cancelled (closeIO) before `this` or `raw` go away.
         const bool heardSignal = refHeard_.exchange(false);
         const bool running = audioAccess_.outputRunning ? audioAccess_.outputRunning() : defaultOutputRunning();
-        if (raw->watch.update(heardSignal, running, kSilenceCheckSeconds) && onWarning)
-            onWarning(systemAudioSilentWarning());
+        if (raw->watch.update(heardSignal, running, kSilenceCheckSeconds))
+            warn(WarningKind::SystemAudioSilent, systemAudioSilentWarning());
     });
     dispatch_resume(timer->source);
     silenceTimer_ = std::move(timer);

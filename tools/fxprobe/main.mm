@@ -1137,7 +1137,7 @@ int cmdEngineTest(const EngineTestOptions& o)
         std::lock_guard<std::mutex> lock(eventsMutex);
         events.push_back({t, false, false, state});
     };
-    backend.onWarning = [&](juce::String warning) {
+    backend.onWarning = [&](mac::WarningKind, juce::String warning) {
         std::printf("%8.3f s  warning: %s\n", elapsed(), warning.toRawUTF8());
     };
     backend.onDeviceLost = [&] {
