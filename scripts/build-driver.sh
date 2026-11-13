@@ -8,6 +8,9 @@
 # upstream README/CHANGELOG/VERSION/icon removed from Resources, version = fixomic's), then the
 # bundle is signed ad-hoc. The GPL-3.0 LICENSE stays in the bundle.
 #
+# Behaviour (DEFINES below): 48 kHz only, fixomic Mic visible and allowed as the default input,
+# fixomic Bridge hidden and never a default device, the volume control ignored.
+#
 # FIXOMIC_DRIVER_OUT_DIR=<absolute dir>: build there instead of build/driver (used by
 # scripts/package-release.sh, so a release never touches the dev build).
 set -euo pipefail
@@ -33,7 +36,7 @@ VERSION="$(sed -nE 's/^project\(fixomic VERSION ([0-9.]+).*/\1/p' "$ROOT/CMakeLi
 FACTORY_UUID_UPSTREAM="e395c745-4eea-4d94-bb92-46224221047c"
 FACTORY_UUID="3d76a877-64be-43f2-aa01-b4194a898640"
 
-for tool in xcodebuild rsync patch lipo codesign strings /usr/libexec/PlistBuddy; do
+for tool in xcodebuild xcrun rsync patch lipo codesign strings /usr/libexec/PlistBuddy; do
     command -v "$tool" >/dev/null || { echo "error: '$tool' not found" >&2; exit 1; }
 done
 [[ -f "$UPSTREAM/BlackHole/BlackHole.c" ]] || {
@@ -68,8 +71,16 @@ DEFINES=(
     'kDevice2_HasOutput=true'
     'kNumber_Of_Channels=2'
     'kSampleRates=48000'
-    'kCanBeDefaultDevice=false'
+    # fixomic Mic can be the default input ("come qualsiasi microfono": games and some apps only
+    # follow the default input); fixomic Bridge never becomes a default device. Per device through
+    # driver/patches/0002-per-device-can-be-default.patch. Neither is ever the system (alert) device.
+    'kCanBeDefaultDevice=true'
+    'kDevice2_CanBeDefaultDevice=false'
     'kCanBeDefaultSystemDevice=false'
+    'kDevice2_CanBeDefaultSystemDevice=false'
+    # The volume control stays (BlackHole has no switch for the object) but no longer scales the
+    # audio, so apps that adjust the input level by themselves (Zoom) cannot lower fixomic Mic.
+    'kEnableVolumeControl=false'
     'kManufacturer_Name=\"fixomic\"'
     'kPlugIn_Icon=\"fixomic.icns\"'
 )
@@ -136,6 +147,24 @@ done
 for s in "Existential" "BlackHole Box" "BlackHole.icns"; do
     ! grep -qF "$s" <<<"$BIN_STRINGS" || fail "upstream branding '$s' still in the binary"
 done
+# The behaviour macros as the patched source sees them (the same DEFINES as xcodebuild's; the
+# string ones are left out, the source has defaults for them): the default-device answers per device
+# (Bridge ? <Bridge> : <Mic>) and the volume scaling switched off. clang -E turns true / false into
+# 1 / 0 (stdbool.h).
+behaviour_defines=()
+for d in "${DEFINES[@]}"; do
+    [[ "$d" =~ ^k[A-Za-z0-9_]+=(true|false|[0-9]+)$ ]] && behaviour_defines+=("-D$d")
+done
+PREPROCESSED="$(xcrun clang -E -P -x c -isysroot "$(xcrun --show-sdk-path)" "${behaviour_defines[@]}" \
+    "$SRC_DIR/BlackHole/BlackHole.c" 2>/dev/null)" || fail "cannot preprocess $SRC_DIR/BlackHole/BlackHole.c"
+answers="$({ grep -E '\*\(\(UInt32\*\)outData\) = \(inObjectID == kObjectID_Device2\) \?' <<<"$PREPROCESSED" || true; } \
+    | sed -E 's/.*\? *([a-z0-9]+) *: *([a-z0-9]+) *;.*/\1:\2/' | tr '\n' ' ')"
+[[ "$answers" =~ ^(0|false):(1|true)\ (0|false):(0|false)\ $ ]] \
+    || fail "default-device answers (Bridge:Mic, CanBeDefault then CanBeDefaultSystem) are '$answers'"
+grep -A2 -E '^[[:space:]]*if[[:space:]]*\([[:space:]]*(0|false)[[:space:]]*\)' <<<"$PREPROCESSED" | grep -q 'vDSP_vsmul(ioMainBuffer' \
+    || fail "the volume still scales the audio (kEnableVolumeControl)"
+echo "macros: CanBeDefaultDevice Mic yes / Bridge no, CanBeDefaultSystemDevice no / no, volume scaling off"
+
 resources="$(cd "$RES" && LC_ALL=C ls | tr '\n' ' ')"
 [[ "$resources" == "LICENSE fixomic.icns " ]] || fail "unexpected resources: $resources"
 codesign --verify --deep --strict "$PRODUCT"

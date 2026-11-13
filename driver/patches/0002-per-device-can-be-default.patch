@@ -1,0 +1,43 @@
+kAudioDevicePropertyDeviceCanBeDefaultDevice / ...CanBeDefaultSystemDevice answer per device:
+kDevice2_CanBeDefaultDevice / kDevice2_CanBeDefaultSystemDevice (default: the first device's
+kCanBeDefaultDevice / kCanBeDefaultSystemDevice) for the second device, so fixomic Mic can be the
+default input while fixomic Bridge never becomes a default device (GPL-3.0 build of BlackHole v0.7.2).
+
+--- a/BlackHole/BlackHole.c
++++ b/BlackHole/BlackHole.c
+@@ -250,8 +250,17 @@
+ 
+ #ifndef kCanBeDefaultSystemDevice
+ #define                             kCanBeDefaultSystemDevice           true
++#endif
++
++//  The second device's own answers; by default the same as the first device's.
++#ifndef kDevice2_CanBeDefaultDevice
++#define                             kDevice2_CanBeDefaultDevice         kCanBeDefaultDevice
+ #endif
+ 
++#ifndef kDevice2_CanBeDefaultSystemDevice
++#define                             kDevice2_CanBeDefaultSystemDevice   kCanBeDefaultSystemDevice
++#endif
++
+ static pthread_mutex_t              gPlugIn_StateMutex                  = PTHREAD_MUTEX_INITIALIZER;
+ static UInt32                       gPlugIn_RefCount                    = 0;
+ static AudioServerPlugInHostRef     gPlugIn_Host                        = NULL;
+@@ -2640,7 +2649,7 @@
+ 			//	will use to play their content on and FaceTime will use as it's microhphone.
+ 			//	Nearly all devices should allow for this.
+ 			FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "BlackHole_GetDevicePropertyData: not enough space for the return value of kAudioDevicePropertyDeviceCanBeDefaultDevice for the device");
+-			*((UInt32*)outData) = kCanBeDefaultDevice;
++			*((UInt32*)outData) = (inObjectID == kObjectID_Device2) ? kDevice2_CanBeDefaultDevice : kCanBeDefaultDevice;
+ 			*outDataSize = sizeof(UInt32);
+ 			break;
+ 
+@@ -2650,7 +2659,7 @@
+ 			//	other incidental or UI-related sounds on. Most devices should allow this
+ 			//	although devices with lots of latency may not want to.
+ 			FailWithAction(inDataSize < sizeof(UInt32), theAnswer = kAudioHardwareBadPropertySizeError, Done, "BlackHole_GetDevicePropertyData: not enough space for the return value of kAudioDevicePropertyDeviceCanBeDefaultSystemDevice for the device");
+-			*((UInt32*)outData) = kCanBeDefaultSystemDevice;
++			*((UInt32*)outData) = (inObjectID == kObjectID_Device2) ? kDevice2_CanBeDefaultSystemDevice : kCanBeDefaultSystemDevice;
+ 			*outDataSize = sizeof(UInt32);
+ 			break;
+ 

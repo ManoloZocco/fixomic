@@ -2,9 +2,9 @@
 
 The virtual audio devices used by fixomic are a build of
 [BlackHole](https://github.com/ExistentialAudio/BlackHole) by Existential Audio Inc.,
-included unmodified as a git submodule (`driver/BlackHole`, tag `v0.7.2`) and configured only
-through its documented preprocessor macros. Many thanks to Devin Roth and Existential Audio for
-BlackHole.
+included unmodified as a git submodule (`driver/BlackHole`, tag `v0.7.2`) and configured through
+its preprocessor macros, plus two small patches applied to a copy at build time (below). Many
+thanks to Devin Roth and Existential Audio for BlackHole.
 
 BlackHole is licensed under the GNU General Public License v3.0, and so is the driver built
 from it: see `driver/LICENSE`. The driver is a separate program (a CoreAudio HAL plug-in loaded
@@ -18,9 +18,14 @@ by `coreaudiod`); the fixomic app only talks to it through the public CoreAudio 
 | `fixomic Bridge` | `fixomic_2_UID` | output, 2 ch     | hidden  | the fixomic app writes it  |
 
 Both devices share one ring buffer inside the driver: whatever is written to Bridge at sample
-time `t` is read from Mic at sample time `t`. Only 48000 Hz is offered, neither device can become
-the default (system) device, the bundle id is `it.manolozocco.fixomic.driver`. The names and UIDs
-are mirrored in `src/platform/mac/FixomicDevices.h`. Bridge is hidden, so it is not listed by
+time `t` is read from Mic at sample time `t`. Only 48000 Hz is offered. Mic can be the default
+input (`kAudioDevicePropertyDeviceCanBeDefaultDevice` = 1: apps and games that only follow the
+default input can use it like any microphone); Bridge never becomes a default device, and neither
+is ever the system (alert) device. The volume control is still published (BlackHole has no switch
+for it) but no longer scales the audio (`kEnableVolumeControl=false`), so an app that adjusts the
+input level by itself (Zoom) cannot lower fixomic Mic. The bundle id is
+`it.manolozocco.fixomic.driver`. The names and UIDs are mirrored in
+`src/platform/mac/FixomicDevices.h`. Bridge is hidden, so it is not listed by
 `kAudioHardwarePropertyDevices` or in System Settings; resolve it with
 `kAudioHardwarePropertyTranslateUIDToDevice`.
 
@@ -41,7 +46,12 @@ the box name, model and manufacturer from `kDriver_Name` / `kManufacturer_Name` 
 hard-codes "BlackHole Box", "BlackHole", "Existential Audio Inc."). The device icon is
 `driver/resources/fixomic.icns`, a placeholder regenerated with `scripts/make-driver-icon.sh`.
 Upstream README, CHANGELOG, VERSION and icon are removed from the bundle; the GPL-3.0 LICENSE
-stays. The bundle version is fixomic's project version. The audio path itself is unpatched: all
+stays. The bundle version is fixomic's project version.
+
+Default devices: upstream answers both default-device properties with one macro for both devices.
+`driver/patches/0002-per-device-can-be-default.patch` adds `kDevice2_CanBeDefaultDevice` /
+`kDevice2_CanBeDefaultSystemDevice` for the second device (Bridge); the script checks the
+preprocessed answers after the build. The audio path itself is unpatched: all
 `fxprobe check-driver` checks pass on the stock IO code.
 
 ## Demand detection (used by Task 7)
