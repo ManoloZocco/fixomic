@@ -22,7 +22,16 @@ class PluginChain;
 // Threading: prepare() and the setters are message-thread; process() is the audio thread and never
 // allocates, locks, logs or throws. The flags are atomics read once per process() call. When the
 // AEC toggles between blocks the stream has a short discontinuity (the AEC adds its fixed delay
-// only while active); the graph never resets the AEC on the audio thread.
+// only while active); the graph never resets the AEC on the audio thread. When the AEC resumes
+// after blocks that skipped it (global bypass, AEC switched off, mic absent, no reference), its
+// FIFOs and the APM still hold the audio of its last active block: the first latencySamples() of
+// output, plus one AEC frame for the APM's filter tail, are muted and then faded in over
+// kResumeFadeSamples, so that old audio is never heard.
+// The AEC's first activation after prepare() is not muted (it starts from a reset state).
+//
+// process() runs with denormals flushed to zero (juce::ScopedNoDenormals: the caller's mode is
+// restored on return), and its output is always finite and within +-1: NaN and +-inf (a misbehaving
+// plugin) become 0, larger samples are clamped, before the output meter and the caller see them.
 class ProcessingGraph {
 public:
     ProcessingGraph(AecStage&, PluginChain&);
@@ -48,6 +57,10 @@ public:
     // callable from any thread, also while process() runs; arming again starts over.
     void armStartupMute(int muteSamples, int fadeSamples) noexcept;
 
+    // Fade-in after the muted stretch that hides the AEC's stale audio when it resumes (20 ms at
+    // 48 kHz, as after the startup mute).
+    static constexpr int kResumeFadeSamples = 960;
+
     Meter inputMeter, outputMeter;
 
 private:
@@ -68,6 +81,9 @@ private:
     int muteLeft_ = 0;
     int fadeLength_ = 0;
     int fadePosition_ = 0;
+    bool aecRan_ = false;      // the AEC processed a block since prepare() (which clears both)
+    bool aecPaused_ = false;   // ... and a later block skipped it: its FIFOs / APM hold old audio
+    int resumeTail_ = 480;     // one AEC frame (10 ms), muted on resume after latencySamples()
     void applyStartupGain(float* left, float* right, int n) noexcept;
 };
 

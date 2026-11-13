@@ -69,7 +69,8 @@ public:
     // A hosted VST3 hands parameter changes to its processor only inside a process call, so an edit
     // made in its editor while nothing processes is missing from its state. This gives every VST3
     // plugin a zero-length block (the VST3 "parameter flush") so saveState() sees the edit. Only
-    // while process() is not running (engine IO closed); no-op before prepare().
+    // while process() is not running (engine IO closed); no-op before prepare(). Runs with
+    // denormals flushed to zero, like the audio thread (both flush variants).
     void flushPluginParameters();
 
     // The same flush while the audio thread runs: the slots it skips (bypassed ones, or every slot

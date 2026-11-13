@@ -12,6 +12,7 @@
 
 #include "dsp/PluginChain.h"
 #include "support/AllocCounter.h"
+#include "support/FpState.h"
 #include "support/TestPlugin.h"
 
 using fixomic::PluginChain;
@@ -399,6 +400,44 @@ TEST_CASE("PluginChain flushes bypassed VST3 slots on the audio thread on reques
         audio.join();
         REQUIRE(acknowledged);
         REQUIRE(TestPlugin::zeroLengthBlocks.load() == before + 1);
+    }
+}
+
+TEST_CASE("PluginChain parameter flushes run with denormals flushed to zero", "[chain][denormals]") {
+    using fixomic::test::denormalResultFlushed;
+    PluginChain chain;
+    chain.prepare(kSampleRate, kBlock);
+    auto vst3 = plugin("vst3");
+    vst3->pretendVst3();
+    std::atomic<int> flushes{0}, flushedFlushes{0};
+    vst3->onProcess = [&](juce::AudioBuffer<float>& b) {
+        if (b.getNumSamples() != 0) return;
+        flushes.fetch_add(1);
+        if (denormalResultFlushed()) flushedFlushes.fetch_add(1);
+    };
+    chain.add(std::move(vst3));
+    REQUIRE_FALSE(denormalResultFlushed());
+
+    SECTION("message thread, IO closed") {
+        chain.flushPluginParameters();
+        REQUIRE(flushes == 1);
+        REQUIRE(flushedFlushes == 1);
+        REQUIRE_FALSE(denormalResultFlushed());   // restored
+    }
+    SECTION("audio thread, through processSkipped (global bypass)") {
+        std::atomic<bool> stop{false};
+        std::thread audio([&] {
+            while (!stop) {
+                chain.processSkipped();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        const bool acknowledged = chain.flushPluginParametersOnAudioThread(500);
+        stop = true;
+        audio.join();
+        REQUIRE(acknowledged);
+        REQUIRE(flushes == 1);
+        REQUIRE(flushedFlushes == 1);
     }
 }
 

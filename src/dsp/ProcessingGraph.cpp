@@ -1,12 +1,27 @@
 #include "dsp/ProcessingGraph.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 
 #include "dsp/AecStage.h"
 #include "dsp/PluginChain.h"
 
 namespace fixomic {
+
+namespace {
+
+constexpr float kOutputLimit = 1.0f;
+
+// NaN and +-inf -> 0, everything else clamped to +-kOutputLimit. Real-time safe.
+void sanitize(float* samples, int n) noexcept {
+    for (int i = 0; i < n; ++i) {
+        const float s = samples[i];
+        samples[i] = std::isfinite(s) ? std::clamp(s, -kOutputLimit, kOutputLimit) : 0.0f;
+    }
+}
+
+} // namespace
 
 ProcessingGraph::ProcessingGraph(AecStage& aec, PluginChain& chain) : aec_(aec), chain_(chain) {}
 
@@ -17,6 +32,8 @@ void ProcessingGraph::prepare(double sampleRate, int maxBlockSize) {
     midi_.ensureSize(256);
     inputMeter.prepare(sampleRate);
     outputMeter.prepare(sampleRate);
+    aecRan_ = aecPaused_ = false;   // the caller prepared or reset the AEC with it
+    resumeTail_ = std::max(1, static_cast<int>(std::lround(sampleRate / 100.0)));   // one AEC frame
 }
 
 void ProcessingGraph::setAecEnabled(bool enabled) noexcept { aecEnabled_.store(enabled); }
@@ -48,6 +65,7 @@ void ProcessingGraph::applyStartupGain(float* left, float* right, int n) noexcep
 
 void ProcessingGraph::process(const float* mic, const float* ref, float* outL, float* outR, int n) noexcept {
     if (n <= 0) return;
+    const juce::ScopedNoDenormals noDenormals;   // the AEC and the plugins; restored on return
 
     if (const std::uint64_t request = startupRequest_.exchange(0, std::memory_order_acquire); request != 0) {
         muteLeft_ = static_cast<int>((request >> 32) & 0x7fffffffu);
@@ -59,6 +77,21 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
     const bool bypass = bypass_.load();
     const bool aecActive = micPresent && !bypass && aecEnabled_.load() && ref != nullptr;
     aecActive_.store(aecActive);
+    if (aecActive) {
+        if (aecPaused_) {
+            // Resumed: its first latencySamples() of output are audio from before the pause, and the
+            // APM's filters ring for about one more frame (measured: -54 dBFS after a -6 dBFS tone,
+            // -91 dBFS one frame later). Muted (a longer startup mute in progress is kept), then
+            // faded in.
+            muteLeft_ = std::max(muteLeft_, aec_.latencySamples() + resumeTail_);
+            fadeLength_ = std::max(fadeLength_, kResumeFadeSamples);
+            fadePosition_ = 0;
+            aecPaused_ = false;
+        }
+        aecRan_ = true;
+    } else if (aecRan_) {
+        aecPaused_ = true;
+    }
 
     if (!micPresent) {
         std::memset(outL, 0, sizeof(float) * static_cast<size_t>(n));
@@ -77,6 +110,8 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
         }
         inputMeter.push(mic, n);   // before the gain: `outL` may alias `mic`
         applyStartupGain(outL, outR, n);
+        sanitize(outL, n);
+        sanitize(outR, n);
         outputMeter.push(outL, n);
         return;
     }
@@ -114,6 +149,8 @@ void ProcessingGraph::process(const float* mic, const float* ref, float* outL, f
         }
 
         applyStartupGain(left, right, len);
+        sanitize(left, len);   // what the Bridge receives: never NaN / inf, never beyond +-1
+        sanitize(right, len);
         outputMeter.push(left, len);
     }
 }

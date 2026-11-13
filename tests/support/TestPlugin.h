@@ -4,6 +4,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <functional>
 #include <thread>
 
 namespace fixomic::test {
@@ -74,7 +75,12 @@ public:
     void processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer&) override {
         if (buffer.getNumSamples() == 0) zeroLengthBlocks.fetch_add(1);
         buffer.applyGain(gain_.load());
+        if (onProcess) onProcess(buffer);
     }
+
+    // Runs at the end of every processBlock (zero-length flush blocks included), on the thread that
+    // processes: lets a test look at that thread's state or make the plugin emit odd samples.
+    std::function<void(juce::AudioBuffer<float>&)> onProcess;
     using juce::AudioPluginInstance::processBlock;
     double getTailLengthSeconds() const override { return 0.0; }
     bool acceptsMidi() const override { return false; }

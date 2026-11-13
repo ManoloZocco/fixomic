@@ -183,6 +183,7 @@ std::vector<PluginSlot> PluginChain::saveState() const {
 
 void PluginChain::flushPluginParameters() {
     if (maxBlockSize_.load() <= 0) return;
+    const juce::ScopedNoDenormals noDenormals;   // as on the audio thread; restored on return
     juce::MidiBuffer midi;
     for (const auto& slot : snapshot().slots) {
         auto* plugin = slot->plugin.get();
@@ -268,6 +269,9 @@ const PluginChain::Snapshot* PluginChain::acquire() noexcept {
 void PluginChain::serviceFlushRequest(const Snapshot& s, bool everySlot) noexcept {
     const std::uint32_t requested = flushRequested_.load();
     if (requested == flushServed_.load(std::memory_order_relaxed)) return;
+    // processSkipped() may be called outside ProcessingGraph::process(): its own guard (nested
+    // guards just save and restore the same mode).
+    const juce::ScopedNoDenormals noDenormals;
     // Zero-length views: no sample is touched, no allocation for <= 32 channels.
     float* const channels[2] = {flushScratch_, flushScratch_ + 1};
     for (const auto& slot : s.slots) {

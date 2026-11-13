@@ -7,6 +7,8 @@
 #import <CoreAudio/AudioHardwareTapping.h>
 #import <Foundation/Foundation.h>
 
+#include <juce_audio_basics/juce_audio_basics.h>   // juce::ScopedNoDenormals
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -165,6 +167,9 @@ OSStatus AggregateIO::Impl::ioProc(AudioObjectID, const AudioTimeStamp*, const A
 void AggregateIO::Impl::process(const AudioBufferList* input, const AudioTimeStamp* inputTime,
                                 AudioBufferList* output)
 {
+    // The whole IO cycle (the Callback included) with denormals flushed to zero; the HAL thread's
+    // own mode is restored on return. Saves and restores a CPU register: no allocation.
+    const juce::ScopedNoDenormals noDenormals;
     if (output != nullptr)
         for (UInt32 b = 0; b < output->mNumberBuffers; ++b)
             if (output->mBuffers[b].mData != nullptr)

@@ -9,6 +9,7 @@
 #include <vector>
 #include <atomic>
 #include <chrono>
+#include <limits>
 #include <thread>
 
 #include "dsp/AecStage.h"
@@ -16,6 +17,7 @@
 #include "dsp/PluginChain.h"
 #include "dsp/ProcessingGraph.h"
 #include "support/AllocCounter.h"
+#include "support/FpState.h"
 #include "support/TestPlugin.h"
 
 using fixomic::AecStage;
@@ -194,7 +196,7 @@ TEST_CASE("ProcessingGraph runs the chain after the AEC", "[graph]") {
 
     std::vector<float> mic(4800, 0.0f);
     const std::vector<float> ref(4800, 0.0f);
-    mic[0] = 1.0f;
+    mic[0] = 0.4f;   // doubled by the chain, it stays below the output's +-1 limit
     std::vector<float> l, r;
     rig.run(mic, &ref, l, r);
 
@@ -203,8 +205,8 @@ TEST_CASE("ProcessingGraph runs the chain after the AEC", "[graph]") {
         if (std::abs(l[i]) > std::abs(l[peak])) peak = i;
     REQUIRE(peak >= static_cast<size_t>(total - 8));
     REQUIRE(peak <= static_cast<size_t>(total + 8));
-    // The AEC output of the unit impulse is attenuated by the APM; the chain must double whatever
-    // the AEC alone produces.
+    // The AEC output of the impulse is attenuated by the APM; the chain must double whatever the
+    // AEC alone produces.
     Rig aecOnly(false);
     aecOnly.graph.setAecEnabled(true);
     std::vector<float> l2, r2;
@@ -385,4 +387,174 @@ TEST_CASE("ProcessingGraph under global bypass still serves a VST3 parameter flu
     audio.join();
     REQUIRE(acknowledged);
     REQUIRE(TestPlugin::zeroLengthBlocks.load() == before + 1);
+}
+
+// ---- final review fixes -------------------------------------------------------------------------
+
+TEST_CASE("ProcessingGraph processes with denormals flushed to zero and restores the caller's mode",
+          "[graph][denormals]") {
+    using fixomic::test::denormalResultFlushed;
+    using fixomic::test::flushToZeroFlagSet;
+    Rig rig(false);
+    auto probe = std::make_unique<TestPlugin>("probe");
+    int calls = 0;
+    bool flushedInside = false, flagInside = false;
+    probe->onProcess = [&](juce::AudioBuffer<float>&) {
+        ++calls;
+        flushedInside = denormalResultFlushed();
+        flagInside = flushToZeroFlagSet();
+    };
+    rig.chain.add(std::move(probe));
+    rig.graph.setAecEnabled(true);
+
+    REQUIRE_FALSE(denormalResultFlushed());   // the test thread keeps IEEE denormals
+    std::vector<float> mic(kBlock, 0.1f), ref(kBlock, 0.1f), l(kBlock), r(kBlock);
+    for (const float* reference : {static_cast<const float*>(nullptr), static_cast<const float*>(ref.data())}) {
+        calls = 0;
+        flushedInside = flagInside = false;
+        rig.graph.process(mic.data(), reference, l.data(), r.data(), kBlock);
+        REQUIRE(calls == 1);
+        REQUIRE(flushedInside);
+#if defined(__aarch64__) || defined(__x86_64__)
+        REQUIRE(flagInside);   // FPCR.FZ / MXCSR FTZ+DAZ, as the CPU reports it
+#endif
+        REQUIRE_FALSE(denormalResultFlushed());   // restored on the way out
+        REQUIRE_FALSE(flushToZeroFlagSet());
+    }
+}
+
+TEST_CASE("ProcessingGraph output is finite and within +-1 whatever the chain emits", "[graph]") {
+    constexpr float kNaN = std::numeric_limits<float>::quiet_NaN();
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+    Rig rig(false);
+    auto wild = std::make_unique<TestPlugin>("wild");
+    wild->onProcess = [=](juce::AudioBuffer<float>& b) {
+        constexpr float pattern[] = {kNaN, kInf, -kInf, 3.5f, -2.0f, 0.25f};
+        for (int c = 0; c < b.getNumChannels(); ++c) {
+            float* x = b.getWritePointer(c);
+            for (int i = 0; i < b.getNumSamples(); ++i) x[i] = pattern[i % 6];
+        }
+    };
+    rig.chain.add(std::move(wild));
+
+    for (const bool aec : {false, true}) {
+        rig.graph.setAecEnabled(aec);
+        const std::vector<float> mic(4 * kBlock, 0.1f), ref(4 * kBlock, 0.0f);
+        std::vector<float> l, r;
+        rig.run(mic, &ref, l, r, 77);   // odd blocks: the pattern restarts in every block
+        for (const auto* out : {&l, &r}) {
+            for (const float s : *out) {
+                REQUIRE(std::isfinite(s));
+                REQUIRE(std::abs(s) <= 1.0f);
+            }
+        }
+        // Block of 77 samples: NaN and +-inf become 0, out-of-range samples are clamped, the rest kept.
+        REQUIRE(l[0] == 0.0f);
+        REQUIRE(l[1] == 0.0f);
+        REQUIRE(l[2] == 0.0f);
+        REQUIRE(l[3] == 1.0f);
+        REQUIRE(l[4] == -1.0f);
+        REQUIRE(l[5] == 0.25f);
+        REQUIRE(l == r);
+        REQUIRE(std::isfinite(rig.graph.outputMeter.peakDb()));
+        REQUIRE(rig.graph.outputMeter.peakDb() <= 0.0f);
+    }
+}
+
+TEST_CASE("ProcessingGraph sanitising the output never allocates", "[graph][alloc]") {
+    Rig rig(false);
+    auto wild = std::make_unique<TestPlugin>("wild");
+    wild->onProcess = [](juce::AudioBuffer<float>& b) {
+        b.setSample(0, 0, std::numeric_limits<float>::infinity());
+    };
+    rig.chain.add(std::move(wild));
+    std::vector<float> mic(kBlock, 0.1f), l(kBlock), r(kBlock);
+    rig.graph.process(mic.data(), nullptr, l.data(), r.data(), kBlock);   // warm-up
+    fixomic::test::startCountingAllocations();
+    for (int i = 0; i < 10; ++i) rig.graph.process(mic.data(), nullptr, l.data(), r.data(), kBlock);
+    REQUIRE(fixomic::test::stopCountingAllocations() == 0);
+    REQUIRE(l[0] == 0.0f);
+}
+
+namespace {
+
+// 1 kHz at -6 dBFS: passes the APM's high-pass filter, and with a silent reference the AEC3 leaves it
+// almost untouched.
+std::vector<float> tone(size_t n) {
+    std::vector<float> v(n);
+    for (size_t i = 0; i < n; ++i)
+        v[i] = 0.5f * static_cast<float>(std::sin(2.0 * 3.14159265358979 * 1000.0 * static_cast<double>(i) / kSampleRate));
+    return v;
+}
+
+float maxAbs(const std::vector<float>& v, size_t from = 0, size_t to = SIZE_MAX) {
+    float peak = 0.0f;
+    for (size_t i = from; i < std::min(to, v.size()); ++i) peak = std::max(peak, std::abs(v[i]));
+    return peak;
+}
+
+} // namespace
+
+TEST_CASE("ProcessingGraph mutes the AEC's stale audio when it resumes", "[graph][aec]") {
+    Rig rig(false);   // empty chain: the output is the AEC's
+    rig.graph.setAecEnabled(true);
+    const int latency = rig.aec.latencySamples();
+    REQUIRE(latency > 0);
+    const auto speech = tone(4800);
+    const std::vector<float> silence(4800, 0.0f), ref(4800, 0.0f);
+    std::vector<float> l, r;
+    rig.run(speech, &ref, l, r);   // the AEC's FIFOs and the APM now hold the tone
+    REQUIRE(maxAbs(l, static_cast<size_t>(latency) + 480) > 0.1f);
+
+    // Paused, then resumed on silence: anything that comes out is audio from before the pause.
+    SECTION("after a global bypass") {
+        rig.graph.setBypass(true);
+        rig.run(silence, &ref, l, r);
+        rig.graph.setBypass(false);
+    }
+    SECTION("after the AEC was switched off") {
+        rig.graph.setAecEnabled(false);
+        rig.run(silence, &ref, l, r);
+        rig.graph.setAecEnabled(true);
+    }
+    SECTION("after a block without the microphone") {
+        rig.graph.setMicPresent(false);
+        rig.run(silence, &ref, l, r);
+        rig.graph.setMicPresent(true);
+    }
+    SECTION("after blocks without a reference") {
+        rig.run(silence, nullptr, l, r);
+    }
+    rig.run(silence, &ref, l, r);
+    REQUIRE(rig.graph.aecActive());
+    // The AEC's latency plus one frame (its filters' tail) is silent; the fade-in that follows lets
+    // through only the very end of that tail, far below hearing.
+    const size_t muted = static_cast<size_t>(latency + 480);
+    INFO("stale audio after resume, AEC latency " << latency);
+    REQUIRE(maxAbs(l, 0, muted) == 0.0f);
+    REQUIRE(maxAbs(l) < 1.0e-4f);   // -80 dBFS
+    REQUIRE(l == r);
+
+    // New audio comes through again once the muted stretch and the fade-in are over.
+    rig.run(speech, &ref, l, r);
+    REQUIRE(maxAbs(l, static_cast<size_t>(latency) + ProcessingGraph::kResumeFadeSamples + 480) > 0.1f);
+}
+
+TEST_CASE("ProcessingGraph does not mute the AEC's first activation or a steady run", "[graph][aec]") {
+    Rig rig(false);
+    rig.graph.setAecEnabled(true);
+    const auto speech = tone(9600);
+    const std::vector<float> ref(9600, 0.0f);
+    std::vector<float> continuous, l, r;
+    rig.run(speech, &ref, continuous, r);
+
+    // The same signal fed again with no pause: no muted stretch at the seam.
+    Rig again(false);
+    again.graph.setAecEnabled(true);
+    const std::vector<float> first(speech.begin(), speech.begin() + 4800), second(speech.begin() + 4800, speech.end());
+    std::vector<float> l1, l2;
+    again.run(first, &ref, l1, r);
+    again.run(second, &ref, l2, r);
+    l1.insert(l1.end(), l2.begin(), l2.end());
+    REQUIRE(l1 == continuous);
 }
