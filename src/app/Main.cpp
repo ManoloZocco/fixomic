@@ -24,6 +24,7 @@
 //                               --set-input BuiltInHeadphoneInputDevice
 //   --set-buffer <64|128|256>   sets the buffer size, as the settings do (applied at once)
 //   --set-aec <0|1>             turns echo cancellation off / on, as the panel's switch does
+//   --global-bypass <0|1>       turns the panel's Bypass switch on / off (all processing)
 //   --status                    engine state, chain, latency (and its breakdown), scan state, open IO,
 //                               meters
 //   --list-effects              the catalog's effects
@@ -271,6 +272,11 @@ bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& com
             const bool on = intArg(++i) != 0;
             app.updateConfig([on](fixomic::Config& c) { c.aecEnabled = on; });
             log(juce::String("aec ") + (on ? "on" : "off"));
+        } else if (arg == "--global-bypass" && i + 1 < args.size()) {
+            // The panel's Bypass switch (MainPanel), for timing the AEC resume mute on real IO.
+            const bool on = intArg(++i) != 0;
+            app.updateConfig([on](fixomic::Config& c) { c.globalBypass = on; });
+            log(juce::String("global bypass ") + (on ? "on" : "off"));
         } else if (arg == "--status") {
             printStatus(app, tray);
         } else if (arg == "--list-effects") {
