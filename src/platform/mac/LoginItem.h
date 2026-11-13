@@ -5,7 +5,7 @@
 namespace fixomic::mac {
 
 // "Open at login" through SMAppService.mainAppService (macOS 13+): the app itself, at the path it
-// runs from, registered as a login item (Impostazioni di Sistema -> Generali -> Elementi login).
+// runs from, registered as a login item (Impostazioni di Sistema -> Generali -> Elementi login ed estensioni).
 // Main thread.
 
 // The service is enabled (registered and approved).

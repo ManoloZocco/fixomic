@@ -34,7 +34,7 @@ bool setLaunchAtLogin(bool enabled, juce::String& error)
             return false;
         }
         if (service.status == SMAppServiceStatusRequiresApproval) {
-            error = juce::String::fromUTF8("Approva fixomic in Impostazioni di Sistema → Generali → Elementi login");
+            error = juce::String::fromUTF8("Approva fixomic in Impostazioni di Sistema → Generali → Elementi login ed estensioni");
             return false;
         }
         return true;
