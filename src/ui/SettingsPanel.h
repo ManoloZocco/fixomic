@@ -23,9 +23,11 @@ namespace fixomic::ui {
 //   Avvio all'accesso: a switch; why it could not be changed, inline;
 //   Driver: its status; "Installa driver" or "Aggiorna driver (vX → vY)", and "Disinstalla driver",
 //     confirmed inline since it removes a system component. While an operation runs the buttons are
-//     disabled and "Operazione in corso…" shows; then its result, until the view is reset;
-//   Permessi: the microphone and system audio states, "Apri Impostazioni di Sistema" for each one not
-//     granted (system audio "Non noto" is unknown, not denied);
+//     disabled and "Operazione in corso…" shows; then its result, until the view is reset (a result
+//     that arrived while the view was closed survives one reset: it shows at the next opening);
+//   Permessi: the microphone and system audio states; "Consenti il microfono" while macOS has not asked
+//     for it (System Settings does not list fixomic yet), "Apri Impostazioni di Sistema" for a denied
+//     microphone and for system audio not granted ("Non noto" is unknown, not denied);
 //   "Rivedi la configurazione iniziale".
 //
 // Data in through setData(), intents out through the callbacks (MainPanel wires them to the
@@ -41,6 +43,7 @@ public:
         bool launchAtLogin = false;    // the login item's system state
         DriverFacts driver;
         mac::Permission microphone = mac::Permission::NotDetermined;
+        bool microphoneRequestPending = false;   // the microphone prompt is up
         mac::Permission systemAudio = mac::Permission::NotDetermined;
         std::optional<mac::WarningKind> warning;
         bool operator==(const Data&) const = default;
@@ -51,7 +54,8 @@ public:
 
     void setData(const Data&);
     const Data& data() const;
-    // Back to the start: no uninstall confirmation, no driver result, no login error.
+    // Back to the start, when the view is opened: no uninstall confirmation, no login error, no driver
+    // result unless it arrived while the view was closed (not visible) and has not been seen yet.
     void reset();
     int heightForWidth(int width) const;
 
@@ -67,6 +71,7 @@ public:
     std::function<void()> onInstallDriver;     // install, or update
     std::function<void()> onUninstallDriver;   // after the inline confirmation
     std::function<void(mac::PrivacyPane)> onOpenPane;
+    std::function<void()> onRequestMicrophone;   // "Consenti il microfono"
     std::function<void()> onReviewSetup;       // "Rivedi la configurazione iniziale"
     std::function<void()> onClose;             // back, Escape
 
@@ -95,6 +100,7 @@ private:
     Operation operation_ = Operation::None;   // started here, running
     Operation finished_ = Operation::None;    // the last one, for its result line
     juce::String driverError_;
+    bool resultUnseen_ = false;               // the result arrived while the view was closed
     bool confirming_ = false;
     juce::String loginError_;
     std::vector<int> separators_;
@@ -128,6 +134,7 @@ private:
     TextBlock permissionsTitle_{TextStyle::BodyStrong, TextBlock::Ink::Primary};
     TextBlock micPermissionLabel_{TextStyle::Body, TextBlock::Ink::Primary};
     TextBlock micPermission_{TextStyle::Body, TextBlock::Ink::Secondary, juce::Justification::topRight};
+    juce::TextButton micAsk_;
     juce::TextButton micSettings_;
     TextBlock audioPermissionLabel_{TextStyle::Body, TextBlock::Ink::Primary};
     TextBlock audioPermission_{TextStyle::Body, TextBlock::Ink::Secondary, juce::Justification::topRight};

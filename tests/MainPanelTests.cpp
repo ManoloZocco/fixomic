@@ -2,6 +2,7 @@
 
 #include "app/AppController.h"
 #include "ui/MainPanel.h"
+#include "ui/SetupModel.h"
 #include "core/Config.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -333,5 +334,40 @@ TEST_CASE("The panel stays up for the guide when the app loses the focus", "[ui]
         s.window.activeStatusChanged(false);
         REQUIRE_FALSE(s.window.isVisible());
         REQUIRE(s.panel().page() == MainPanel::Page::Main);
+    }
+}
+
+TEST_CASE("AppController says whether the loaded config stated the onboarding flag, and states it soon", "[ui][app]") {
+    juce::ScopedJuceInitialiser_GUI gui;
+    TempDir tmp;
+    const auto file = tmp.dir.getChildFile("config.xml");
+    const auto atLaunch = [](const AppController& app) {
+        return launchGuide(app.onboardingFlagStored(), app.config().onboardingDone);
+    };
+
+    SECTION("no config file: the guide opens; the flag is saved soon, so the next launch shows only the reminder") {
+        {
+            AppController app{appOptions(tmp.dir)};
+            REQUIRE_FALSE(app.onboardingFlagStored());
+            REQUIRE(atLaunch(app) == LaunchGuide::Open);
+            REQUIRE(pumpUntil([&] { return file.existsAsFile(); }, 3000));   // without waiting for the quit
+        }
+        REQUIRE(file.loadFileAsString().contains("onboardingDone=\"0\""));
+        AppController next{appOptions(tmp.dir)};
+        REQUIRE(next.onboardingFlagStored());
+        REQUIRE(atLaunch(next) == LaunchGuide::Reminder);
+    }
+    SECTION("a config from before the flag, already set up: nothing opens, and it is stated from now on") {
+        REQUIRE(file.replaceWithText("<FixomicConfig version=\"1\" inputDeviceUid=\"no-such-mic\"/>"));
+        {
+            AppController app{appOptions(tmp.dir)};
+            REQUIRE_FALSE(app.onboardingFlagStored());
+            REQUIRE(app.config().onboardingDone);
+            REQUIRE(atLaunch(app) == LaunchGuide::None);
+            REQUIRE(pumpUntil([&] { return file.loadFileAsString().contains("onboardingDone=\"1\""); }, 3000));
+        }
+        AppController next{appOptions(tmp.dir)};
+        REQUIRE(next.onboardingFlagStored());
+        REQUIRE(atLaunch(next) == LaunchGuide::None);
     }
 }

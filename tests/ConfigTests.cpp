@@ -91,6 +91,31 @@ TEST_CASE("a config written before the onboarding flag counts as onboarded once 
     REQUIRE(fromXmlString("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\"/>")->inputDeviceName.isEmpty());
 }
 
+TEST_CASE("parseConfig says whether the document stated onboardingDone") {
+    REQUIRE_FALSE(parseConfig("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\"/>")->onboardingFlagStored);
+    REQUIRE(parseConfig("<FixomicConfig version=\"1\" onboardingDone=\"0\"/>")->onboardingFlagStored);
+    REQUIRE(parseConfig("<FixomicConfig version=\"1\" onboardingDone=\"1\"/>")->onboardingFlagStored);
+    REQUIRE_FALSE(parseConfig("<other/>").has_value());
+    // The config itself is fromXmlString's.
+    REQUIRE(parseConfig("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\"/>")->config.onboardingDone);
+}
+
+TEST_CASE("ConfigStore::loadParsed reports the flag as not stored for a missing or corrupt file") {
+    auto dir = makeTempDir();
+    const auto file = dir.getChildFile("config.xml");
+    ConfigStore store(file);
+    REQUIRE_FALSE(store.loadParsed().onboardingFlagStored);   // missing
+    REQUIRE(file.replaceWithText("garbage"));
+    REQUIRE_FALSE(store.loadParsed().onboardingFlagStored);   // corrupt
+    REQUIRE(file.replaceWithText("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\"/>"));
+    REQUIRE_FALSE(store.loadParsed().onboardingFlagStored);   // written before the flag
+    Config c;
+    REQUIRE(store.save(c));   // every save states it
+    REQUIRE(store.loadParsed().onboardingFlagStored);
+    REQUIRE_FALSE(store.loadParsed().config.onboardingDone);
+    dir.deleteRecursively();
+}
+
 TEST_CASE("malformed xml returns nullopt") {
     REQUIRE_FALSE(fromXmlString("<nope").has_value());
 }

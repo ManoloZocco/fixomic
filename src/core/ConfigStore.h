@@ -13,6 +13,8 @@ public:
 
     // Missing or corrupt file -> Config{}. A corrupt file is renamed to <file>.bak first.
     Config load() const;
+    // load(), and whether the file stated onboardingDone (false for a missing or corrupt file too).
+    ParsedConfig loadParsed() const;
 
     // Writes to a temporary file next to the target, then renames it over the target.
     bool save(const Config&) const;

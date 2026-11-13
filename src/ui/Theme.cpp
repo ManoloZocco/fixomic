@@ -60,8 +60,16 @@ Palette makeDark() {
     return p;
 }
 
+juce::String styleOf(const juce::Component& c) { return c.getProperties()[Theme::kStyleProperty].toString(); }
+
 bool isFlat(const juce::Component& c) {
-    return c.getProperties()[Theme::kStyleProperty].toString() == Theme::kFlatStyle;
+    const auto style = styleOf(c);
+    return style == Theme::kFlatStyle || style == Theme::kFlatCaptionStyle;
+}
+
+// The text of a TextButton of that style: body for a plain flat button, caption otherwise.
+TextStyle buttonTextStyle(const juce::Component& c) {
+    return styleOf(c) == Theme::kFlatStyle ? TextStyle::Body : TextStyle::Caption;
 }
 
 } // namespace
@@ -128,8 +136,9 @@ int Theme::pushButtonWidth(const juce::String& text) {
     return juce::GlyphArrangement::getStringWidthInt(font(TextStyle::Caption), text) + 2 * 10 + 2;
 }
 
-int Theme::flatButtonWidth(const juce::String& text) {
-    return juce::GlyphArrangement::getStringWidthInt(font(TextStyle::Body), text) + 2 * kFlatTextInset;
+int Theme::flatButtonWidth(const juce::TextButton& button) {
+    return juce::GlyphArrangement::getStringWidthInt(font(buttonTextStyle(button)), button.getButtonText())
+           + 2 * kFlatTextInset;
 }
 
 void Theme::darkModeSettingChanged() {
@@ -234,7 +243,7 @@ void Theme::drawButtonText(juce::Graphics& g, juce::TextButton& button, bool, bo
 }
 
 juce::Font Theme::getTextButtonFont(juce::TextButton& button, int) {
-    return font(isFlat(button) ? TextStyle::Body : TextStyle::Caption);
+    return font(buttonTextStyle(button));
 }
 
 juce::Font Theme::getPopupMenuFont() { return font(TextStyle::Body); }

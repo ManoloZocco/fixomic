@@ -13,6 +13,12 @@ namespace {
 
 double nowMs() { return juce::Time::getMillisecondCounterHiRes(); }
 
+Config loadConfig(const ConfigStore& store, bool& onboardingFlagStored) {
+    auto loaded = store.loadParsed();
+    onboardingFlagStored = loaded.onboardingFlagStored;
+    return std::move(loaded.config);
+}
+
 AudioObjectPropertyAddress systemProperty(AudioObjectPropertySelector selector) {
     return {selector, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
 }
@@ -23,7 +29,7 @@ AppController::AppController() : AppController(Options{}) {}
 
 AppController::AppController(Options options)
     : store_(options.configFile),
-      config_(store_.load()),
+      config_(loadConfig(store_, onboardingFlagStored_)),
       catalog_(options.pluginCacheFile, options.catalog),
       graph_(aec_, chain_),
       backend_(graph_, aec_, chain_, [this] { return config_; }),
@@ -92,6 +98,9 @@ AppController::AppController(Options options)
 
     engine_.setConfig(config_);
     rememberInputName();
+    // Stated soon, not only at quit: the next launch tells a first launch (the guide opens by itself)
+    // from a guide closed early (only the panel's reminder row), see ui::launchGuide.
+    if (!onboardingFlagStored_) scheduleSave();
     demand_.start();
     startTimer(kTimerMs);
     scanPlugins();
@@ -178,6 +187,7 @@ std::optional<mac::PrivacyPane> AppController::lastWarningPane() const {
 // ---- config -----------------------------------------------------------------------------------
 
 const Config& AppController::config() const { return config_; }
+bool AppController::onboardingFlagStored() const { return onboardingFlagStored_; }
 
 void AppController::updateConfig(std::function<void(Config&)> edit) {
     Config next = config_;

@@ -1,7 +1,6 @@
 #pragma once
 
 #include "platform/mac/CoreAudioDevices.h"
-#include "platform/mac/MacEngineBackend.h"
 #include "platform/mac/Permissions.h"
 
 #include <juce_core/juce_core.h>
@@ -89,6 +88,18 @@ juce::String systemAudioPermissionText(mac::Permission, std::optional<mac::Warni
 
 // ---- first-run guide -----------------------------------------------------------------------------
 
+// What the first-run guide does at launch, from the config as loaded: whether it stated onboardingDone
+// (AppController::onboardingFlagStored) and its value.
+enum class LaunchGuide {
+    None,       // set up: nothing
+    Open,       // a first launch: the panel opens on the guide by itself
+    Reminder,   // closed early before: nothing opens, the panel shows its reminder row
+};
+// Open only when the flag was not stated and the config is not onboarded: no file, or a document from
+// before the flag that the old-config rule (Config.h) does not count as set up. A stated false is a
+// guide closed early: Reminder. Never Open at every login.
+LaunchGuide launchGuide(bool onboardingFlagStored, bool onboardingDone);
+
 enum class SetupStep { Microphone, SystemAudio, Driver, ChooseInApp };
 inline constexpr int kSetupStepCount = 4;
 
@@ -139,5 +150,11 @@ std::array<StepState, kSetupStepCount> setupSteps(const SetupFacts&);
 // satisfied are passed over; "Salta" moves `from` past the open one). Always found: the last step is
 // never done.
 int currentSetupStep(const std::array<StepState, kSetupStepCount>&, int from);
+
+// What the settings offer for a permission: None when granted. The microphone: Ask while macOS has
+// not asked (fixomic is not listed in System Settings yet), OpenSettings when denied. System audio:
+// OpenSettings unless granted (NotDetermined is unknown, maybe denied).
+StepAction microphoneSettingsAction(mac::Permission);
+StepAction systemAudioSettingsAction(mac::Permission);
 
 } // namespace fixomic::ui

@@ -1,6 +1,7 @@
 #include "ui/Onboarding.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace fixomic::ui {
 
@@ -20,11 +21,12 @@ constexpr const char* kTitles[kSetupStepCount] = {"Microfono", "Audio di sistema
                                                   "Scegli fixomic Mic nella tua app"};
 
 const char* const kWaitingForAnswer = "In attesa della tua risposta alla richiesta di macOS…";
+const char* const kRequestFailed = "La richiesta non \u00e8 riuscita: riprova.";
 const char* const kSystemAudioSettings =
     "Impostazioni di Sistema → Privacy e sicurezza → Registrazione schermo e audio di sistema";
 
 int pushButtonWidth(const juce::TextButton& button) { return Theme::pushButtonWidth(button.getButtonText()); }
-int flatButtonWidth(const juce::TextButton& button) { return Theme::flatButtonWidth(button.getButtonText()); }
+int flatButtonWidth(const juce::TextButton& button) { return Theme::flatButtonWidth(button); }
 
 const char* statusName(StepStatus status) {
     switch (status) {
@@ -69,7 +71,7 @@ Onboarding::Onboarding() {
     primary_.onClick = [this] { primaryClicked(); };
     skip_.setButtonText("Salta");
     skip_.setTitle("Salta questo passo");
-    skip_.getProperties().set(Theme::kStyleProperty, Theme::kFlatStyle);
+    skip_.getProperties().set(Theme::kStyleProperty, Theme::kFlatCaptionStyle);   // the size of the button beside it
     skip_.setMouseClickGrabsKeyboardFocus(false);
     skip_.onClick = [this] { skip(); };
 
@@ -97,7 +99,10 @@ const Onboarding::Data& Onboarding::data() const { return data_; }
 
 void Onboarding::restart() {
     from_ = 0;
-    driverError_.clear();
+    if (!std::exchange(resultUnseen_, false)) {   // seen: gone; unseen: it shows now, then goes
+        driverError_.clear();
+        audioRequestFailed_ = false;
+    }
     update();
 }
 
@@ -110,6 +115,13 @@ int Onboarding::currentStep() const { return currentSetupStep(steps_, from_); }
 
 void Onboarding::driverOperationFinished(bool ok, const juce::String& error) {
     driverError_ = ok ? juce::String() : (error.isNotEmpty() ? error : juce::String("Installazione non riuscita."));
+    if (!ok) resultUnseen_ = !isVisible();   // the panel was closed meanwhile: keep it for the next opening
+    update();
+}
+
+void Onboarding::systemAudioRequestFinished(bool ok) {
+    audioRequestFailed_ = !ok;
+    if (!ok) resultUnseen_ = !isVisible();
     update();
 }
 
@@ -222,9 +234,13 @@ void Onboarding::update() {
     devices_.setItems(std::move(items));
     devices_.setVisible(listDevices);
 
-    const bool showError = open.step == SetupStep::Driver && driverError_.isNotEmpty() && open.status != StepStatus::Waiting;
-    error_.setText(showError ? driverError_ : juce::String());
-    error_.setVisible(showError);
+    juce::String error;
+    if (open.step == SetupStep::Driver && open.status != StepStatus::Waiting)
+        error = driverError_;
+    else if (open.step == SetupStep::SystemAudio && open.action == StepAction::Ask && audioRequestFailed_)
+        error = utf8(kRequestFailed);   // the throwaway IO failed: the prompt may not have been shown
+    error_.setText(error);
+    error_.setVisible(error.isNotEmpty());
 
     primary_.setButtonText(action);
     primary_.setVisible(action.isNotEmpty());
@@ -240,13 +256,18 @@ void Onboarding::primaryClicked() {
     switch (open.action) {
     case StepAction::Ask:
         if (open.step == SetupStep::Microphone && onRequestMicrophone) onRequestMicrophone();
-        if (open.step == SetupStep::SystemAudio && onRequestSystemAudio) onRequestSystemAudio();
+        if (open.step == SetupStep::SystemAudio) {
+            audioRequestFailed_ = false;
+            update();
+            if (onRequestSystemAudio) onRequestSystemAudio();
+        }
         break;
     case StepAction::OpenSettings:
         if (open.pane && onOpenPane) onOpenPane(*open.pane);
         break;
     case StepAction::Install:
         driverError_.clear();
+        resultUnseen_ = false;
         update();
         if (onInstallDriver) onInstallDriver();
         break;
@@ -299,7 +320,7 @@ Onboarding::Layout Onboarding::layOut(int width) const {
     const int current = currentStep();
     for (int i = 0; i < kSetupStepCount; ++i) {
         const auto index = static_cast<size_t>(i);
-        l.markers[index] = {static_cast<float>(kInset + kMarkerSize / 2), static_cast<float>(y + kTitleHeight / 2)};
+        l.markers[index] = {static_cast<float>(kInset) + kMarkerSize / 2.0f, static_cast<float>(y) + kTitleHeight / 2.0f};
         l.titles[index] = {kTextX, y, textWidth, kTitleHeight};
         y += kTitleHeight;
         if (stepDetails_[index].isVisible()) {

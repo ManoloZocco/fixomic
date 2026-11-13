@@ -12,11 +12,13 @@ juce::File ConfigStore::defaultLocation() {
         .getChildFile("config.xml");
 }
 
-Config ConfigStore::load() const {
+Config ConfigStore::load() const { return loadParsed().config; }
+
+ParsedConfig ConfigStore::loadParsed() const {
     if (!file_.existsAsFile())
         return {};
 
-    if (auto parsed = fromXmlString(file_.loadFileAsString()))
+    if (auto parsed = parseConfig(file_.loadFileAsString()))
         return *std::move(parsed);
 
     // Corrupt: keep the evidence next to the original, then start from defaults.

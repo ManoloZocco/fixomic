@@ -43,12 +43,17 @@ public:
 
     void setData(const Data&);
     const Data& data() const;
-    void restart();     // from the first step not done; no driver error
+    // From the first step not done, when the guide is opened; no driver error or failed request, unless
+    // it arrived while the guide was closed (not visible) and has not been seen yet.
+    void restart();
     void skip();        // "Salta": past the open step
     int currentStep() const;
     int heightForWidth(int width) const;
 
     void driverOperationFinished(bool ok, const juce::String& error);
+    // The system audio request asked through onRequestSystemAudio returned; ok = false: it failed
+    // (the prompt may not have been shown), said in the step until it is asked again.
+    void systemAudioRequestFinished(bool ok);
 
     std::function<void()> onRequestMicrophone;
     std::function<void()> onRequestSystemAudio;
@@ -82,6 +87,8 @@ private:
     std::array<StepState, kSetupStepCount> steps_{};
     int from_ = 0;
     juce::String driverError_;
+    bool audioRequestFailed_ = false;   // the last system audio request failed
+    bool resultUnseen_ = false;         // one of those arrived while the guide was closed
     std::array<juce::Point<float>, kSetupStepCount> markers_{};   // station centres, from the last layout
 
     GlyphButton back_{GlyphButton::Glyph::Back, "Chiudi la configurazione iniziale"};

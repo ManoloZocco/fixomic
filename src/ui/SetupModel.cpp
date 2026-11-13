@@ -180,4 +180,23 @@ int currentSetupStep(const std::array<StepState, kSetupStepCount>& steps, int fr
     return kSetupStepCount - 1;
 }
 
+LaunchGuide launchGuide(bool onboardingFlagStored, bool onboardingDone) {
+    if (onboardingDone) return LaunchGuide::None;
+    return onboardingFlagStored ? LaunchGuide::Reminder : LaunchGuide::Open;
+}
+
+StepAction microphoneSettingsAction(mac::Permission permission) {
+    switch (permission) {
+    case mac::Permission::Granted: return StepAction::None;
+    case mac::Permission::Denied: return StepAction::OpenSettings;
+    case mac::Permission::NotDetermined: break;
+    }
+    return StepAction::Ask;   // not listed in Privacy -> Microfono yet: System Settings cannot help
+}
+
+StepAction systemAudioSettingsAction(mac::Permission permission) {
+    // NotDetermined is "unknown" (the preflight is stale or missing): it may well be denied.
+    return permission == mac::Permission::Granted ? StepAction::None : StepAction::OpenSettings;
+}
+
 } // namespace fixomic::ui

@@ -73,11 +73,13 @@ struct SettingsRig {
     std::vector<int> channels, buffers;
     std::vector<bool> loginRequests;
     juce::String loginAnswer;
-    int installs = 0, uninstalls = 0, reviews = 0, closes = 0;
+    int installs = 0, uninstalls = 0, reviews = 0, closes = 0, micRequests = 0;
     std::vector<PrivacyPane> panes;
 
     SettingsRig() {
         view.setSize(kViewWidth, 10);
+        view.setVisible(true);   // open, as MainPanel shows it
+        view.onRequestMicrophone = [this] { ++micRequests; };
         view.onChooseDevice = [this](const DeviceChoice& d) { devices.push_back(d); };
         view.onChooseChannel = [this](int c) { channels.push_back(c); };
         view.onChooseBuffer = [this](int b) { buffers.push_back(b); };
@@ -231,6 +233,28 @@ TEST_CASE("SettingsPanel driver: install, update, uninstall confirmed inline, pr
         s.view.reset();   // reopened: the old result is gone
         REQUIRE(s.view.driverMessage().isEmpty());
     }
+    SECTION("a result that arrives while the view is closed shows at the next opening, once") {
+        data.driver = {false, {}, "0.1.0", false, false};
+        s.view.setData(data);
+        button(s.view, "Installa driver")->onClick();
+        s.view.setVisible(false);   // the panel was closed meanwhile
+        s.view.driverOperationFinished(false, "Installazione annullata");
+        s.view.reset();             // opened again (MainPanel resets, then shows it)
+        s.view.setVisible(true);
+        REQUIRE(s.view.driverMessage() == "Installazione annullata");
+        s.view.setVisible(false);   // seen: the next opening starts clean
+        s.view.reset();
+        s.view.setVisible(true);
+        REQUIRE(s.view.driverMessage().isEmpty());
+
+        // A success too.
+        button(s.view, "Installa driver")->onClick();
+        s.view.setVisible(false);
+        s.view.driverOperationFinished(true, {});
+        s.view.reset();
+        s.view.setVisible(true);
+        REQUIRE(s.view.driverMessage() == "Driver installato.");
+    }
     SECTION("uninstall asks first, inside the view") {
         s.view.setData(data);
         button(s.view, "Disinstalla driver")->onClick();
@@ -265,6 +289,30 @@ TEST_CASE("SettingsPanel driver: install, update, uninstall confirmed inline, pr
         REQUIRE(button(s.view, "Installa driver") == nullptr);
         REQUIRE(s.view.driverMessage() == "Questa copia di fixomic non contiene il driver.");
     }
+}
+
+TEST_CASE("SettingsPanel asks for the microphone when macOS has not asked yet; the link only when denied",
+          "[ui][setupview]") {
+    SettingsRig s;
+    auto data = settingsData("builtin", "x");
+    data.microphone = Permission::NotDetermined;
+    s.view.setData(data);
+    REQUIRE(button(s.view, "Apri Impostazioni di Sistema: microfono") == nullptr);
+    auto* ask = button(s.view, "Consenti il microfono");
+    REQUIRE(ask != nullptr);
+    REQUIRE(ask->isEnabled());
+    ask->onClick();
+    REQUIRE(s.micRequests == 1);
+
+    data.microphoneRequestPending = true;   // the prompt is up
+    s.view.setData(data);
+    REQUIRE_FALSE(button(s.view, "Consenti il microfono")->isEnabled());
+
+    data.microphoneRequestPending = false;
+    data.microphone = Permission::Denied;
+    s.view.setData(data);
+    REQUIRE(button(s.view, "Consenti il microfono") == nullptr);
+    REQUIRE(button(s.view, "Apri Impostazioni di Sistema: microfono") != nullptr);
 }
 
 TEST_CASE("SettingsPanel permissions: System Settings for each one not granted", "[ui][setupview]") {
@@ -323,6 +371,7 @@ struct GuideRig {
 
     GuideRig() {
         guide.setSize(kViewWidth, 10);
+        guide.setVisible(true);   // open, as MainPanel shows it
         guide.onRequestMicrophone = [this] { ++micRequests; };
         guide.onRequestSystemAudio = [this] { ++audioRequests; };
         guide.onInstallDriver = [this] { ++installs; };
@@ -430,6 +479,55 @@ TEST_CASE("Onboarding: Salta moves past a step, restart goes back to the first o
     REQUIRE(g.guide.keyPressed(juce::KeyPress(juce::KeyPress::escapeKey)));
     REQUIRE(g.closes == 1);
     REQUIRE(g.finishes == 0);   // closed early: not done
+}
+
+TEST_CASE("Onboarding: a system audio request that failed says so, and asking again clears it", "[ui][setupview]") {
+    GuideRig g;
+    SetupFacts f;
+    f.microphone = Permission::Granted;
+    f.microphoneChosen = true;
+    g.set(f, "scarlett");
+    REQUIRE(g.guide.currentStep() == 1);
+    g.guide.primaryButton().onClick();
+    REQUIRE(g.audioRequests == 1);
+    g.guide.systemAudioRequestFinished(false);   // the throwaway IO failed: the prompt may not have shown
+    REQUIRE(g.guide.errorText() == utf8("La richiesta non \u00e8 riuscita: riprova."));
+    REQUIRE(g.primary() == utf8("Consenti l\u2019audio di sistema"));
+    g.guide.primaryButton().onClick();          // again
+    REQUIRE(g.audioRequests == 2);
+    REQUIRE(g.guide.errorText().isEmpty());
+    g.guide.systemAudioRequestFinished(true);
+    REQUIRE(g.guide.errorText().isEmpty());
+}
+
+TEST_CASE("Onboarding: a driver error that arrives while the guide is closed shows at the next opening, once",
+          "[ui][setupview]") {
+    GuideRig g;
+    SetupFacts f;
+    f.microphone = Permission::Granted;
+    f.microphoneChosen = true;
+    f.systemAudio = Permission::Granted;
+    g.set(f, "scarlett");
+    REQUIRE(g.guide.currentStep() == 2);
+    g.guide.primaryButton().onClick();
+    REQUIRE(g.installs == 1);
+    g.guide.setVisible(false);   // closed meanwhile
+    g.guide.driverOperationFinished(false, "Installazione annullata");
+    g.guide.restart();           // opened again
+    g.guide.setVisible(true);
+    REQUIRE(g.guide.errorText() == "Installazione annullata");
+    g.guide.setVisible(false);
+    g.guide.restart();
+    g.guide.setVisible(true);
+    REQUIRE(g.guide.errorText().isEmpty());
+
+    // Seen while open: gone at the next opening.
+    g.guide.driverOperationFinished(false, "Installazione annullata");
+    REQUIRE(g.guide.errorText() == "Installazione annullata");
+    g.guide.setVisible(false);
+    g.guide.restart();
+    g.guide.setVisible(true);
+    REQUIRE(g.guide.errorText().isEmpty());
 }
 
 TEST_CASE("Onboarding: a denied or silent tap reported later reopens the system audio step", "[ui][setupview]") {

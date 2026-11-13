@@ -1,6 +1,7 @@
 #include "ui/MainPanel.h"
 
 #include "app/AppController.h"
+#include "ui/PanelPages.h"
 
 #include <algorithm>
 #include <cmath>
@@ -121,7 +122,7 @@ MainPanel::MainPanel(AppController& app) : app_(app) {
     addChildComponent(*setupRow_);
     addChildComponent(settings_);
     addChildComponent(onboarding_);
-    wirePages();
+    connectPages(*this, app_);
 
     refresh(status_);
     setSize(kWidth, preferredHeight(kWidth));
@@ -286,108 +287,12 @@ void MainPanel::updateVisibility() {
     onboarding_.setVisible(page_ == Page::Onboarding);
 }
 
-// ---- settings and first-run guide -------------------------------------------------------------
-
-void MainPanel::wirePages() {
-    settings_.onClose = [this] { closePage(); };
-    settings_.onChooseDevice = [this](const DeviceChoice& device) { chooseDevice(device); };
-    settings_.onChooseChannel = [this](int channel) {
-        app_.updateConfig([channel](Config& c) { c.inputChannel = channel; });
-    };
-    // Applied at once: the engine reopens the IO, and the AEC and the plugins are prepared for the
-    // new size while it is closed (MacEngineBackend::openIO).
-    settings_.onChooseBuffer = [this](int size) { app_.updateConfig([size](Config& c) { c.bufferSize = size; }); };
-    settings_.onSetLaunchAtLogin = [this](bool enabled) {
-        juce::String error;
-        app_.setLaunchAtLogin(enabled, error);
-        refreshPage();   // the switch shows the system state
-        return error;
-    };
-    settings_.onInstallDriver = [this] {
-        app_.installDriver([safe = juce::Component::SafePointer<MainPanel>(this)](bool ok, juce::String error) {
-            if (safe != nullptr) safe->settings_.driverOperationFinished(ok, error);
-        });
-        refreshPage();   // in progress
-    };
-    settings_.onUninstallDriver = [this] {
-        app_.uninstallDriver([safe = juce::Component::SafePointer<MainPanel>(this)](bool ok, juce::String error) {
-            if (safe != nullptr) safe->settings_.driverOperationFinished(ok, error);
-        });
-        refreshPage();
-    };
-    settings_.onOpenPane = [this](mac::PrivacyPane pane) { app_.openPrivacySettings(pane); };
-    settings_.onReviewSetup = [this] { showOnboarding(); };
-
-    onboarding_.onClose = [this] { closePage(); };   // closed early: onboardingDone stays false
-    onboarding_.onRequestMicrophone = [this] {
-        // The answer re-evaluates the engine and notifies; the prompt's pending state shows at once.
-        app_.requestMicrophone([](bool) {});
-    };
-    onboarding_.onRequestSystemAudio = [this] { app_.requestSystemAudio([](bool) {}); };
-    onboarding_.onChooseDevice = [this](const DeviceChoice& device) { chooseDevice(device); };
-    onboarding_.onOpenPane = [this](mac::PrivacyPane pane) { app_.openPrivacySettings(pane); };
-    onboarding_.onInstallDriver = [this] {
-        app_.installDriver([safe = juce::Component::SafePointer<MainPanel>(this)](bool ok, juce::String error) {
-            if (safe != nullptr) safe->onboarding_.driverOperationFinished(ok, error);
-        });
-        refreshPage();
-    };
-    onboarding_.onFinish = [this] {
-        app_.updateConfig([](Config& c) { c.onboardingDone = true; });
-        closePage();
-    };
-}
-
-void MainPanel::chooseDevice(const DeviceChoice& device) {
-    app_.updateConfig([uid = device.uid, name = device.name](Config& c) {
-        c.inputDeviceUid = uid;
-        c.inputDeviceName = name;
-        c.inputChannel = 0;
-    });
-}
-
-DriverFacts MainPanel::driverFacts() const {
-    return {app_.driverInstalled(), app_.installedDriverVersion(), app_.bundledDriverVersion(),
-            app_.driverUpdateAvailable(), app_.driverOperationInProgress()};
-}
-
-SettingsPanel::Data MainPanel::settingsData() const {
-    const auto& config = app_.config();
-    SettingsPanel::Data data;
-    data.devices = deviceChoices(app_.inputDevices(), config.inputDeviceUid, config.inputDeviceName);
-    data.channel = config.inputChannel;
-    data.bufferSize = config.bufferSize;
-    data.launchAtLogin = app_.launchAtLogin();
-    data.driver = driverFacts();
-    data.microphone = app_.microphonePermission();
-    data.systemAudio = app_.systemAudioPermission();
-    data.warning = app_.lastWarningKind();
-    return data;
-}
-
-Onboarding::Data MainPanel::onboardingData() const {
-    const auto& config = app_.config();
-    Onboarding::Data data;
-    data.devices = deviceChoices(app_.inputDevices(), config.inputDeviceUid, config.inputDeviceName);
-    data.driver = driverFacts();
-    auto& f = data.facts;
-    f.microphone = app_.microphonePermission();
-    f.microphoneRequestPending = app_.microphoneRequestPending();
-    f.microphoneChosen = config.inputDeviceUid.isNotEmpty();
-    f.systemAudio = app_.systemAudioPermission();
-    f.systemAudioRequestPending = app_.systemAudioRequestPending();
-    f.systemAudioAnswered = app_.systemAudioAnswered();
-    f.warning = app_.lastWarningKind();
-    f.driverInstalled = data.driver.installed;
-    f.driverOperationInProgress = data.driver.operationInProgress;
-    f.driverBundled = data.driver.bundledVersion.isNotEmpty();
-    return data;
-}
+// ---- settings and first-run guide (their data and wiring: PanelPages) ---------------------------
 
 void MainPanel::refreshPage() {
     switch (page_) {
-    case Page::Settings: settings_.setData(settingsData()); break;
-    case Page::Onboarding: onboarding_.setData(onboardingData()); break;
+    case Page::Settings: settings_.setData(settingsData(app_)); break;
+    case Page::Onboarding: onboarding_.setData(onboardingData(app_)); break;
     case Page::Main: break;
     }
 }
@@ -431,7 +336,9 @@ SettingsPanel& MainPanel::settings() { return settings_; }
 Onboarding& MainPanel::onboarding() { return onboarding_; }
 
 bool MainPanel::holdsOpen() const {
-    return page_ == Page::Onboarding || (page_ == Page::Settings && settings_.driverOperationStarted());
+    if (page_ == Page::Onboarding) return true;
+    // From the settings: an administrator dialog, or the microphone prompt, has the focus.
+    return page_ == Page::Settings && (settings_.driverOperationStarted() || app_.microphoneRequestPending());
 }
 
 bool MainPanel::showsSetupReminder() const { return setupRow_->isVisible(); }

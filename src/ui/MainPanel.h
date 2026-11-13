@@ -33,7 +33,7 @@ namespace fixomic::ui {
 //
 // Two views take the whole panel's place, each with its own back control: the SettingsPanel
 // ("Impostazioni…") and the Onboarding (on first launch, from the reminder row, from the settings'
-// "Rivedi la configurazione iniziale"). Their intents go to the AppController; "Fine" sets
+// "Rivedi la configurazione iniziale"). Their intents go to the AppController (PanelPages); "Fine" sets
 // Config.onboardingDone, closing the guide early leaves it false.
 //
 // Refresh: refresh() re-reads the model on AppController::onModelChanged (and the open view's data);
@@ -81,8 +81,8 @@ public:
     // and when the window becomes active again (a prompt or System Settings may have changed them).
     void refreshPage();
     // Stay up when the app loses focus (to a system prompt, the administrator dialog, System Settings
-    // opened from the panel): while the guide is open, or a driver operation started in the settings
-    // runs.
+    // opened from the panel): while the guide is open, or, on the settings, while a driver operation
+    // started there runs or the microphone prompt is up.
     bool holdsOpen() const;
     bool showsSetupReminder() const;   // the "Completa la configurazione" row
 
@@ -107,11 +107,6 @@ private:
     void setPage(Page);
     void updateVisibility();                     // the page's components, the picker or the list
     void releaseFocus(juce::Component& leaving); // to the window, before `leaving` hides
-    void wirePages();
-    DriverFacts driverFacts() const;
-    SettingsPanel::Data settingsData() const;
-    Onboarding::Data onboardingData() const;
-    void chooseDevice(const DeviceChoice&);
 
     AppController& app_;
     StatusPresentation status_;

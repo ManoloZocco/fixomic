@@ -30,14 +30,6 @@ struct MicrophoneAccess {
     std::function<void(std::function<void(bool)>)> request = requestMicrophone;
 };
 
-// What a backend warning (onWarning) is about. Each one leaves the AEC without a working reference.
-enum class WarningKind {
-    SystemAudioDenied,        // the permission is denied: the IO opened without the tap
-    SystemAudioSilent,        // the tap delivers only silence while the Mac plays audio: probably denied
-    SystemAudioUnavailable,   // the tap, or the prompt's throwaway IO, could not be created (the prompt
-                              // may not have been shown)
-};
-
 // Where openIO() gets the System Audio Recording state (injectable for tests).
 struct SystemAudioAccess {
     std::function<Permission()> status = systemAudioPermission;

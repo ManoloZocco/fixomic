@@ -131,6 +131,7 @@ add_library(fixomic_app_lib STATIC
     src/ui/ChainList.cpp
     src/ui/MainPanel.cpp
     src/ui/Onboarding.cpp
+    src/ui/PanelPages.cpp
     src/ui/PanelParts.cpp
     src/ui/PluginPicker.cpp
     src/ui/SettingsPanel.cpp

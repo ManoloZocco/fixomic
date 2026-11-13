@@ -1,8 +1,10 @@
 #include <catch2/catch_test_macros.hpp>
 
+#include "core/Config.h"
 #include "ui/SetupModel.h"
 #include "ui/StatusModel.h"
 
+using fixomic::Config;
 using fixomic::EngineState;
 using fixomic::mac::AudioDeviceInfo;
 using fixomic::mac::Permission;
@@ -172,6 +174,37 @@ TEST_CASE("permission texts: system audio NotDetermined is unknown, never denied
 }
 
 // ---- first-run guide --------------------------------------------------------------------------
+
+TEST_CASE("launchGuide opens the guide by itself only on a first launch", "[ui][setup]") {
+    // No config file: Config{}, the flag not stored.
+    REQUIRE(launchGuide(false, Config{}.onboardingDone) == LaunchGuide::Open);
+    const auto atLaunch = [](const char* xml) {
+        const auto parsed = fixomic::parseConfig(xml);
+        REQUIRE(parsed.has_value());
+        return launchGuide(parsed->onboardingFlagStored, parsed->config.onboardingDone);
+    };
+    // Written before the flag: open only if the old-config rule does not count it as set up.
+    REQUIRE(atLaunch("<FixomicConfig version=\"1\" inputDeviceUid=\"\"/>") == LaunchGuide::Open);
+    REQUIRE(atLaunch("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\"/>") == LaunchGuide::None);
+    REQUIRE(atLaunch("<FixomicConfig version=\"1\"><Plugin description=\"x\"/></FixomicConfig>") == LaunchGuide::None);
+    // Stated false: the guide was closed early; only the panel's reminder row, nothing opens.
+    REQUIRE(atLaunch("<FixomicConfig version=\"1\" onboardingDone=\"0\"/>") == LaunchGuide::Reminder);
+    REQUIRE(atLaunch("<FixomicConfig version=\"1\" inputDeviceUid=\"mic\" onboardingDone=\"0\"/>")
+            == LaunchGuide::Reminder);
+    // Stated true: nothing.
+    REQUIRE(atLaunch("<FixomicConfig version=\"1\" onboardingDone=\"1\"/>") == LaunchGuide::None);
+}
+
+TEST_CASE("the settings ask for a permission macOS has not asked yet, and link only where it helps", "[ui][setup]") {
+    // Not asked yet: fixomic is not listed in Privacy -> Microfono, so the link would lead nowhere.
+    REQUIRE(microphoneSettingsAction(Permission::NotDetermined) == StepAction::Ask);
+    REQUIRE(microphoneSettingsAction(Permission::Denied) == StepAction::OpenSettings);
+    REQUIRE(microphoneSettingsAction(Permission::Granted) == StepAction::None);
+    // System audio: NotDetermined is "unknown" (maybe denied): the link stays.
+    REQUIRE(systemAudioSettingsAction(Permission::NotDetermined) == StepAction::OpenSettings);
+    REQUIRE(systemAudioSettingsAction(Permission::Denied) == StepAction::OpenSettings);
+    REQUIRE(systemAudioSettingsAction(Permission::Granted) == StepAction::None);
+}
 
 TEST_CASE("setupSteps: everything already satisfied", "[ui][setup]") {
     const auto steps = setupSteps(allDone());

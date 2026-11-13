@@ -49,7 +49,8 @@ enum class TextStyle {
 // Components read colours with Theme::palette(component), which resolves through the component's
 // LookAndFeel, so a forced Theme set on a component re-themes it and its children.
 //
-// TextButton styles: property "fixomic.style" = "flat" (borderless, footer) or default (push).
+// TextButton styles: property "fixomic.style" = "flat" (borderless, body text: footer, links),
+// "flat-caption" (borderless, caption text: beside a push button) or default (push).
 // TextEditor (the plugin picker's search field): the push button's fill, edge and radius; focus ring
 // in the accent.
 class Theme : public juce::LookAndFeel_V4, private juce::DarkModeSettingListener {
@@ -71,13 +72,14 @@ public:
     static juce::Font font(TextStyle);
     static constexpr const char* kStyleProperty = "fixomic.style";
     static constexpr const char* kFlatStyle = "flat";
+    static constexpr const char* kFlatCaptionStyle = "flat-caption";
     // A flat button's text starts this far inside it: place the button this far outside the content
     // edge and its text lines up with it.
     static constexpr int kFlatTextInset = 8;
     // The width that fits a button's text: a push button (caption text, 10 pt each side) or a flat
-    // one (body text, kFlatTextInset each side).
+    // one (its style's text, kFlatTextInset each side).
     static int pushButtonWidth(const juce::String& text);
-    static int flatButtonWidth(const juce::String& text);
+    static int flatButtonWidth(const juce::TextButton&);
 
     // ---- LookAndFeel ------------------------------------------------------------------------
     void drawToggleButton(juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;

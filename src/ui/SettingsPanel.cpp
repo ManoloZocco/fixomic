@@ -1,6 +1,7 @@
 #include "ui/SettingsPanel.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace fixomic::ui {
 
@@ -20,7 +21,7 @@ constexpr int kRateWidth = 70;                  // "48 kHz"
 constexpr int kPermissionWidth = 150;           // "Probabilmente negato"
 
 int pushButtonWidth(const juce::TextButton& button) { return Theme::pushButtonWidth(button.getButtonText()); }
-int flatButtonWidth(const juce::TextButton& button) { return Theme::flatButtonWidth(button.getButtonText()); }
+int flatButtonWidth(const juce::TextButton& button) { return Theme::flatButtonWidth(button); }
 
 void setUp(juce::Button& button, const juce::String& text, const juce::String& accessibleTitle = {}) {
     button.setButtonText(text);
@@ -37,7 +38,7 @@ struct SettingsPanel::Layout {
     juce::Rectangle<int> loginLabel, loginSwitch, loginError;
     juce::Rectangle<int> driverTitle, driverStatus, install, uninstall, confirmText, confirmUninstall, cancelUninstall,
         driverMessage;
-    juce::Rectangle<int> permissionsTitle, micPermissionLabel, micPermission, micSettings, audioPermissionLabel,
+    juce::Rectangle<int> permissionsTitle, micPermissionLabel, micPermission, micAsk, micSettings, audioPermissionLabel,
         audioPermission, audioNote, audioSettings;
     juce::Rectangle<int> review;
     std::vector<int> separators;
@@ -86,6 +87,7 @@ SettingsPanel::SettingsPanel() {
         confirming_ = true;
         finished_ = Operation::None;
         driverError_.clear();
+        resultUnseen_ = false;
         update();
     };
     confirmText_.setText(utf8("Disinstallare il driver? fixomic Mic sparirà da tutte le app finché non lo "
@@ -100,6 +102,10 @@ SettingsPanel::SettingsPanel() {
 
     permissionsTitle_.setText("Permessi");
     micPermissionLabel_.setText("Microfono");
+    setUp(micAsk_, "Consenti il microfono");
+    micAsk_.onClick = [this] {
+        if (onRequestMicrophone) onRequestMicrophone();
+    };
     setUp(micSettings_, "Apri Impostazioni di Sistema", "Apri Impostazioni di Sistema: microfono");
     micSettings_.onClick = [this] {
         if (onOpenPane) onOpenPane(mac::PrivacyPane::Microphone);
@@ -123,7 +129,7 @@ SettingsPanel::SettingsPanel() {
         addAndMakeVisible(c);
     for (juce::Component* c : std::initializer_list<juce::Component*>{
              &devices_, &noDevices_, &channelLabel_, &channels_, &rateWarning_, &loginErrorText_, &install_, &uninstall_,
-             &confirmText_, &confirmUninstall_, &cancelUninstall_, &driverMessage_, &micSettings_, &audioNote_,
+             &confirmText_, &confirmUninstall_, &cancelUninstall_, &driverMessage_, &micAsk_, &micSettings_, &audioNote_,
              &audioSettings_})
         addChildComponent(c);
 
@@ -146,8 +152,10 @@ const SettingsPanel::Data& SettingsPanel::data() const { return data_; }
 void SettingsPanel::reset() {
     // A running operation stays tracked: its result shows when the view is opened again.
     confirming_ = false;
-    finished_ = Operation::None;
-    driverError_.clear();
+    if (!std::exchange(resultUnseen_, false)) {   // seen: gone; unseen: it shows now, then goes
+        finished_ = Operation::None;
+        driverError_.clear();
+    }
     loginError_.clear();
     update();
 }
@@ -213,7 +221,10 @@ void SettingsPanel::update() {
 
     // Permessi.
     micPermission_.setText(microphonePermissionText(data_.microphone));
-    micSettings_.setVisible(data_.microphone != mac::Permission::Granted);
+    const auto micAction = microphoneSettingsAction(data_.microphone);
+    micAsk_.setVisible(micAction == StepAction::Ask);
+    micAsk_.setEnabled(!data_.microphoneRequestPending);
+    micSettings_.setVisible(micAction == StepAction::OpenSettings);
     audioPermission_.setText(systemAudioPermissionText(data_.systemAudio, data_.warning));
     juce::String note;
     if (data_.systemAudio == mac::Permission::NotDetermined)
@@ -224,7 +235,7 @@ void SettingsPanel::update() {
                           "Impostazioni di Sistema.");
     audioNote_.setText(note);
     audioNote_.setVisible(note.isNotEmpty());
-    audioSettings_.setVisible(data_.systemAudio != mac::Permission::Granted);
+    audioSettings_.setVisible(systemAudioSettingsAction(data_.systemAudio) == StepAction::OpenSettings);
 
     fitHeight();
     resized();
@@ -238,6 +249,7 @@ void SettingsPanel::startInstall() {
     operation_ = data_.driver.installed ? Operation::Update : Operation::Install;
     finished_ = Operation::None;
     driverError_.clear();
+    resultUnseen_ = false;
     confirming_ = false;
     update();
     if (onInstallDriver) onInstallDriver();
@@ -249,6 +261,7 @@ void SettingsPanel::startUninstall() {
     operation_ = Operation::Uninstall;
     finished_ = Operation::None;
     driverError_.clear();
+    resultUnseen_ = false;
     update();
     if (onUninstallDriver) onUninstallDriver();
 }
@@ -257,6 +270,7 @@ void SettingsPanel::driverOperationFinished(bool ok, const juce::String& error) 
     finished_ = operation_ != Operation::None ? operation_ : Operation::Install;
     operation_ = Operation::None;
     driverError_ = ok ? juce::String() : (error.isNotEmpty() ? error : juce::String("Operazione non riuscita."));
+    resultUnseen_ = !isVisible();   // the panel was closed meanwhile: keep it for the next opening
     update();
 }
 
@@ -386,6 +400,7 @@ SettingsPanel::Layout SettingsPanel::layOut(int width) const {
     l.permissionsTitle = {x, y, content, 18};
     y += 18 + 6;
     labelAndValue(l.micPermissionLabel, l.micPermission, kPermissionWidth);
+    if (micAsk_.isVisible()) pushButton(l.micAsk, micAsk_);
     if (micSettings_.isVisible()) pushButton(l.micSettings, micSettings_);
     y += 8;
     labelAndValue(l.audioPermissionLabel, l.audioPermission, kPermissionWidth);
@@ -435,6 +450,7 @@ void SettingsPanel::resized() {
         {&permissionsTitle_, l.permissionsTitle},
         {&micPermissionLabel_, l.micPermissionLabel},
         {&micPermission_, l.micPermission},
+        {&micAsk_, l.micAsk},
         {&micSettings_, l.micSettings},
         {&audioPermissionLabel_, l.audioPermissionLabel},
         {&audioPermission_, l.audioPermission},

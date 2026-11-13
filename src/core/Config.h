@@ -33,4 +33,12 @@ juce::String toXmlString(const Config&);
 // microphone chosen or a chain: that user set fixomic up by hand.
 std::optional<Config> fromXmlString(const juce::String&);
 
+// fromXmlString(), and whether the document stated onboardingDone (false: written before the flag,
+// the value then comes from the rule above).
+struct ParsedConfig {
+    Config config;
+    bool onboardingFlagStored = false;
+};
+std::optional<ParsedConfig> parseConfig(const juce::String&);
+
 } // namespace fixomic

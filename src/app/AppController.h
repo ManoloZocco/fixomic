@@ -43,7 +43,9 @@ namespace fixomic {
 //
 // Config: config() is the single source of truth, also for the engine backend. It is saved 1 s
 // after the last change (settings, chain structure, bypass, plugin state, an editor closed; at most
-// 10 s after the first of a stream of changes) and on destruction. A save is skipped when the file
+// 10 s after the first of a stream of changes) and on destruction; a config that did not state
+// onboardingDone (no file, or one written before the flag) also 1 s after startup, so it states it
+// from then on. A save is skipped when the file
 // already holds the same XML; a failed write stays pending, is retried 1 s later and is reported by
 // lastSaveError(). Plugin state is captured with
 // PluginChain::saveState() when saving. The chain field of config() is owned by the controller:
@@ -90,6 +92,9 @@ public:
 
     // ---- config ------------------------------------------------------------------------------
     const Config& config() const;
+    // The config file stated onboardingDone when it was loaded at startup. False for no file, a
+    // corrupt one, or one written before the flag existed (Config's rule then decided its value).
+    bool onboardingFlagStored() const;
     // Edits a copy, applies it to the engine (EngineController::setConfig) and schedules a save.
     void updateConfig(std::function<void(Config&)>);
     bool saveNow();                      // false if the write failed (retried by the timer)
@@ -178,6 +183,7 @@ private:
     void rememberInputName();   // stores the configured microphone's name when it is not stored yet
 
     ConfigStore store_;
+    bool onboardingFlagStored_ = false;   // declared before config_: set while config_ loads
     Config config_;
     PluginCatalog catalog_;
     AecStage aec_;

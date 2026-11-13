@@ -36,6 +36,15 @@ Permission systemAudioPermission();
 // the prompt may not have been shown.
 void requestSystemAudio(std::function<void(bool ok, juce::String error)> completion);
 
+// What a MacEngineBackend warning (onWarning) is about. Each one leaves the AEC without a working
+// system audio reference.
+enum class WarningKind {
+    SystemAudioDenied,        // the permission is denied: the IO opened without the tap
+    SystemAudioSilent,        // the tap delivers only silence while the Mac plays audio: probably denied
+    SystemAudioUnavailable,   // the tap, or the prompt's throwaway IO, could not be created (the prompt
+                              // may not have been shown)
+};
+
 // ---- System Settings ---------------------------------------------------------------------------
 
 // The Privacy & Security panes that grant fixomic's permissions.

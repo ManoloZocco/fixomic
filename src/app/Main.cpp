@@ -8,6 +8,7 @@
 #include "plugins/PluginCatalog.h"
 #include "ui/ChainModel.h"
 #include "ui/MainPanel.h"
+#include "ui/SetupModel.h"
 #include "ui/Snapshot.h"
 #include "ui/Theme.h"
 #include "ui/TrayIcon.h"
@@ -388,9 +389,10 @@ public:
             if (tray_ != nullptr) tray_->modelChanged();
         };
         for (const auto& warning : app_->startupWarnings()) log("startup warning: " + warning);
-        // Until the first-run guide is done, the panel opens on it by itself, under the icon, once the
-        // app has finished launching (macOS ignores activation before).
-        if (!app_->config().onboardingDone)
+        // On a first launch the panel opens on the first-run guide by itself, under the icon, once the
+        // app has finished launching (macOS ignores activation before). A guide closed early is only
+        // the panel's reminder row from then on: never opened at every login.
+        if (ui::launchGuide(app_->onboardingFlagStored(), app_->config().onboardingDone) == ui::LaunchGuide::Open)
             juce::Timer::callAfterDelay(kFirstRunDelayMs, [safe = juce::Component::SafePointer<ui::TrayIcon>(tray_.get())] {
                 if (safe != nullptr) safe->showOnboarding();
             });

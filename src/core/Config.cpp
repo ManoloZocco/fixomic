@@ -36,6 +36,12 @@ juce::String toXmlString(const Config& config) {
 }
 
 std::optional<Config> fromXmlString(const juce::String& text) {
+    auto parsed = parseConfig(text);
+    if (!parsed) return std::nullopt;
+    return std::move(parsed->config);
+}
+
+std::optional<ParsedConfig> parseConfig(const juce::String& text) {
     const auto root = juce::XmlDocument::parse(text);
     if (root == nullptr || !root->hasTagName(kRootTag))
         return std::nullopt;
@@ -65,10 +71,10 @@ std::optional<Config> fromXmlString(const juce::String& text) {
     }
 
     // Written before the flag existed: onboarded if it was set up (a microphone or a chain).
-    config.onboardingDone = root->hasAttribute("onboardingDone")
-                                ? root->getBoolAttribute("onboardingDone")
-                                : config.inputDeviceUid.isNotEmpty() || !config.chain.empty();
-    return config;
+    const bool flagStored = root->hasAttribute("onboardingDone");
+    config.onboardingDone = flagStored ? root->getBoolAttribute("onboardingDone")
+                                       : config.inputDeviceUid.isNotEmpty() || !config.chain.empty();
+    return ParsedConfig{std::move(config), flagStored};
 }
 
 } // namespace fixomic
