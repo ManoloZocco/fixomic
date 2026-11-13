@@ -38,6 +38,7 @@ add_library(fixomic_core STATIC
     src/platform/mac/DemandMonitor.mm
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
+    src/platform/mac/AppActivation.mm
     src/platform/mac/Permissions.mm
     src/platform/mac/DriverInstaller.mm
     src/platform/mac/LoginItem.mm
@@ -56,6 +57,7 @@ set_source_files_properties(
     src/platform/mac/DemandMonitor.mm
     src/platform/mac/MacEngineBackend.mm
     src/platform/mac/WakeObserver.mm
+    src/platform/mac/AppActivation.mm
     src/platform/mac/Permissions.mm
     src/platform/mac/DriverInstaller.mm
     src/platform/mac/LoginItem.mm

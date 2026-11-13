@@ -537,9 +537,36 @@ juce::Rectangle<int> panelWindowBounds(std::optional<juce::Rectangle<int>> ancho
     return {x, y, width, height};
 }
 
+juce::Point<int> editorBesidePanel(juce::Rectangle<int> panel, const std::vector<juce::Rectangle<int>>& userAreas,
+                                   juce::Point<int> frameSize, std::optional<int> previousTop) {
+    constexpr int kGap = 8, kCascade = 24;
+    // The panel's display: the user area holding most of it (the first, when it is on none).
+    juce::Rectangle<int> area = userAreas.empty() ? panel : userAreas.front();
+    juce::int64 most = -1;
+    for (const auto& candidate : userAreas) {
+        const auto common = candidate.getIntersection(panel);
+        const auto overlap = static_cast<juce::int64>(common.getWidth()) * common.getHeight();
+        if (overlap > most) {
+            most = overlap;
+            area = candidate;
+        }
+    }
+    int x = panel.getX() - kGap - frameSize.x;   // at the left
+    if (x < area.getX()) {
+        x = panel.getRight() + kGap;              // else at the right
+        if (x + frameSize.x > area.getRight()) x = area.getX();   // else over the panel
+    }
+    const int top = previousTop ? *previousTop + kCascade : panel.getY();
+    const int y = juce::jlimit(area.getY(), std::max(area.getY(), area.getBottom() - frameSize.y), top);
+    return {x, y};
+}
+
+bool panelStaysOpen(bool appActive, bool heldOpen) { return appActive || heldOpen; }
+
 // ---- MainPanelWindow --------------------------------------------------------------------------
 
-MainPanelWindow::MainPanelWindow(AppController& app) : juce::TopLevelWindow("fixomic", false), panel_(app) {
+MainPanelWindow::MainPanelWindow(AppController& app)
+    : juce::TopLevelWindow("fixomic", false), app_(app), panel_(app) {
     setOpaque(false);
     setAlwaysOnTop(true);
     setDropShadowEnabled(true);
@@ -555,9 +582,17 @@ MainPanelWindow::MainPanelWindow(AppController& app) : juce::TopLevelWindow("fix
     };
     fitPanel();
     setSize(MainPanel::kWidth, panel_.getHeight());
+    app_.setEditorHooks(
+        [this](juce::Point<int> frameSize, std::optional<juce::Rectangle<int>> previousFrame) {
+            return editorPosition(frameSize, previousFrame);
+        },
+        [this] { editorClosing(); });
 }
 
-MainPanelWindow::~MainPanelWindow() { panel_.setLive(false); }
+MainPanelWindow::~MainPanelWindow() {
+    app_.setEditorHooks({}, {});
+    panel_.setLive(false);
+}
 
 MainPanel& MainPanelWindow::panel() { return panel_; }
 
@@ -615,14 +650,37 @@ bool MainPanelWindow::keyPressed(const juce::KeyPress& key) {
 }
 
 void MainPanelWindow::activeWindowStatusChanged() {
-    if (isVisible()) activeStatusChanged(isActiveWindow());
+    if (isVisible()) activeStatusChanged(isActiveWindow(), juce::Process::isForegroundProcess());
 }
 
-void MainPanelWindow::activeStatusChanged(bool active) {
-    if (active)
+void MainPanelWindow::activeStatusChanged(bool windowActive, bool appActive) {
+    if (windowActive)
         panel_.refreshPage();   // back from a prompt or System Settings
-    else if (!panel_.holdsOpen())
+    else if (!panelStaysOpen(appActive, panel_.holdsOpen()))
         dismiss();
+}
+
+void MainPanelWindow::appActiveChanged(bool active) {
+    // Also while a plugin editor is the key window: the panel was not active then, so
+    // activeStatusChanged() is not called again.
+    if (!active && !panelStaysOpen(false, panel_.holdsOpen())) dismiss();
+}
+
+std::optional<juce::Point<int>> MainPanelWindow::editorPosition(juce::Point<int> frameSize,
+                                                                std::optional<juce::Rectangle<int>> previousFrame) const {
+    if (!isVisible()) return std::nullopt;   // PluginWindows' default: the remembered position, or centred
+    std::vector<juce::Rectangle<int>> userAreas;
+    for (const auto& display : juce::Desktop::getInstance().getDisplays().displays)
+        userAreas.push_back(display.userBounds.getSmallestIntegerContainer());
+    if (userAreas.empty()) return std::nullopt;
+    return editorBesidePanel(getScreenBounds(), userAreas, frameSize,
+                             previousFrame ? std::optional<int>(previousFrame->getY()) : std::nullopt);
+}
+
+void MainPanelWindow::editorClosing() {
+    // The key window before the editor hides: the app stays the active one (no other window left to
+    // take the focus could hand it to another app), and Escape reaches the panel without a click.
+    if (isVisible()) toFront(true);
 }
 
 } // namespace fixomic::ui

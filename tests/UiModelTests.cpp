@@ -3,6 +3,7 @@
 
 #include "ui/MainPanel.h"
 #include "ui/StatusModel.h"
+#include "support/GeometryPrinting.h"
 
 #include <cmath>
 #include <limits>
@@ -323,4 +324,63 @@ TEST_CASE("the panel window sits under the icon and never runs off the display",
         const auto bounds = panelWindowBounds(std::nullopt, mouse, userArea, 360, 418);
         REQUIRE(bounds == juce::Rectangle<int>(520, 36, 360, 418));
     }
+}
+
+// ---- plugin editors beside the panel ----------------------------------------------------------
+
+TEST_CASE("a plugin editor opens beside the panel, inside the panel's display", "[ui]") {
+    const juce::Rectangle<int> userArea{0, 30, 1710, 1070};   // under a 30 pt menu bar
+    const std::vector<juce::Rectangle<int>> display{userArea};
+    const juce::Rectangle<int> panel{1205, 36, 360, 418};     // under the icon (panelWindowBounds)
+    const juce::Point<int> editor{500, 300};                  // its frame, title bar included
+
+    SECTION("to the panel's left, 8 pt apart, the tops aligned") {
+        REQUIRE(editorBesidePanel(panel, display, editor, std::nullopt) == juce::Point<int>(697, 36));
+        // Exactly as wide as the room on the left: still there.
+        REQUIRE(editorBesidePanel({508, 36, 360, 418}, display, editor, std::nullopt) == juce::Point<int>(0, 36));
+    }
+    SECTION("no room on the left: to the panel's right") {
+        REQUIRE(editorBesidePanel({507, 36, 360, 418}, display, editor, std::nullopt) == juce::Point<int>(875, 36));
+        REQUIRE(editorBesidePanel({100, 36, 360, 418}, display, editor, std::nullopt) == juce::Point<int>(468, 36));
+    }
+    SECTION("room on neither side: at the user area's left edge, over the panel") {
+        const std::vector<juce::Rectangle<int>> narrow{{0, 30, 1000, 870}};
+        REQUIRE(editorBesidePanel({320, 36, 360, 418}, narrow, editor, std::nullopt) == juce::Point<int>(0, 36));
+        // Wider than the whole user area: the same.
+        REQUIRE(editorBesidePanel(panel, display, {1800, 300}, std::nullopt) == juce::Point<int>(0, 36));
+    }
+    SECTION("further editors cascade 24 pt down from the previous one, still beside the panel") {
+        REQUIRE(editorBesidePanel(panel, display, editor, 36) == juce::Point<int>(697, 60));
+        REQUIRE(editorBesidePanel(panel, display, {300, 200}, 60) == juce::Point<int>(897, 84));
+    }
+    SECTION("always clamped vertically inside the user area") {
+        // Cascaded past the bottom: its bottom on the user area's.
+        REQUIRE(editorBesidePanel(panel, display, editor, 900) == juce::Point<int>(697, 1100 - 300));
+        // Taller than the user area: its title bar stays reachable, at the top.
+        REQUIRE(editorBesidePanel(panel, display, {500, 2000}, std::nullopt) == juce::Point<int>(697, 30));
+        // Above the user area (a previous editor dragged up there): moved down into it.
+        REQUIRE(editorBesidePanel(panel, display, editor, -100) == juce::Point<int>(697, 30));
+    }
+    SECTION("multiple displays: the panel's display, never the one next to it") {
+        // The main display, then a taller one at its right, with a 25 pt menu bar.
+        const std::vector<juce::Rectangle<int>> two{{0, 30, 1440, 870}, {1440, 25, 1920, 1055}};
+        // The panel on the second display, near its left edge: the left side would cross onto the
+        // main display, so the editor goes right; clamped against the second display (on the main
+        // one this 1000 pt editor would be pushed up to y = 30).
+        REQUIRE(editorBesidePanel({1460, 31, 360, 600}, two, {500, 1000}, std::nullopt) == juce::Point<int>(1828, 31));
+        // A panel across both: the display holding most of it.
+        REQUIRE(editorBesidePanel({1400, 31, 360, 600}, two, editor, std::nullopt) == juce::Point<int>(1768, 31));
+        // On the main display: its left side, as with one display.
+        REQUIRE(editorBesidePanel({1000, 36, 360, 418}, two, editor, std::nullopt) == juce::Point<int>(492, 36));
+    }
+}
+
+TEST_CASE("the panel stays open while fixomic is the foreground app, or while it holds itself open", "[ui]") {
+    // The focus went from the panel to one of fixomic's plugin editors (or came back from one).
+    REQUIRE(panelStaysOpen(true, false));
+    // Another app or the desktop was clicked, even with an editor focused at the time.
+    REQUIRE_FALSE(panelStaysOpen(false, false));
+    // The administrator dialog or the microphone prompt: another process's, the panel holds itself open.
+    REQUIRE(panelStaysOpen(false, true));
+    REQUIRE(panelStaysOpen(true, true));
 }

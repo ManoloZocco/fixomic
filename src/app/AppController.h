@@ -119,6 +119,10 @@ public:
     void movePlugin(int from, int to);
     void setPluginBypassed(int index, bool);
     bool openEditor(int index);                // false for missing slots / out of range
+    // How the menu-bar panel's window takes part in the editor windows: where a new one opens, and
+    // the user closing one (PluginWindows::placement and onClosing). One panel window sets them;
+    // {} clears them.
+    void setEditorHooks(PluginWindows::Placement, std::function<void()> onClosing);
     // The live instance (nullptr for missing slots / out of range). Do not keep the pointer: the
     // plugin may be destroyed after the next chain edit.
     juce::AudioPluginInstance* plugin(int index) const;

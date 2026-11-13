@@ -285,6 +285,11 @@ bool AppController::openEditor(int index) {
     return true;
 }
 
+void AppController::setEditorHooks(PluginWindows::Placement placement, std::function<void()> onClosing) {
+    windows_.placement = std::move(placement);
+    windows_.onClosing = std::move(onClosing);
+}
+
 juce::AudioPluginInstance* AppController::plugin(int index) const { return chain_.pluginAt(index); }
 
 std::vector<PluginChain::SlotInfo> AppController::slots() const { return chain_.slots(); }

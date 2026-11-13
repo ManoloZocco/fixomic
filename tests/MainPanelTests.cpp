@@ -6,6 +6,8 @@
 #include "ui/SetupModel.h"
 #include "core/Config.h"
 #include "core/ConfigStore.h"
+#include "support/GeometryPrinting.h"
+#include "support/TestPlugin.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -13,6 +15,7 @@
 #include <vector>
 
 using fixomic::AppController;
+using fixomic::test::TestPlugin;
 using namespace fixomic::ui;
 
 // The real panel window on screen, over a real AppController that runs on temp files: no input
@@ -91,13 +94,57 @@ struct LogCapture : juce::Logger {
     void logMessage(const juce::String& message) override { lines.add(message); }
 };
 
+// A chain of two TestPlugins ("fixomic editor A", "fixomic editor B"), restored at startup: their
+// generic editors open in this process, at a known size.
+AppController::Options withTestPlugins(const juce::File& dir) {
+    fixomic::Config c;
+    c.onboardingDone = true;
+    for (const char* name : {"fixomic editor A", "fixomic editor B"}) {
+        fixomic::PluginSlot slot;
+        slot.descriptionXml = TestPlugin(name).getPluginDescription().createXml()->toString();
+        c.chain.push_back(slot);
+    }
+    REQUIRE(fixomic::ConfigStore(dir.getChildFile("config.xml")).save(c));
+    auto o = appOptions(dir);
+    o.restoreFactory = [](const juce::PluginDescription& d, double, int,
+                          juce::String&) -> std::unique_ptr<juce::AudioPluginInstance> {
+        return std::make_unique<TestPlugin>(d.name);
+    };
+    return o;
+}
+
+// The visible editor window of the plugin named `name`, if any.
+juce::DocumentWindow* editorWindow(const juce::String& name) {
+    for (int i = 0; i < juce::TopLevelWindow::getNumTopLevelWindows(); ++i)
+        if (auto* w = dynamic_cast<juce::DocumentWindow*>(juce::TopLevelWindow::getTopLevelWindow(i)))
+            if (w->getName() == name && w->isVisible()) return w;
+    return nullptr;
+}
+
+// A window's frame on screen: its bounds plus the native title bar, if it has one.
+juce::Rectangle<int> frameOf(juce::Component& window) {
+    auto* peer = window.getPeer();
+    REQUIRE(peer != nullptr);
+    const auto border = peer->getFrameSizeIfPresent();
+    REQUIRE(static_cast<bool>(border));
+    return (*border).addedTo(window.getScreenBounds());
+}
+
+// A click on a chain row's name: the chain list's open-editor path.
+void clickName(ChainList& list, int index) {
+    auto& row = *list.row(index);
+    const juce::Point<float> at{30.0f, ChainList::kRowHeight / 2.0f};
+    row.mouseDown(mouseAt(row, at, at, false));
+    row.mouseUp(mouseAt(row, at, at, false));
+}
+
 struct PanelOnScreen {
     juce::ScopedJuceInitialiser_GUI gui;
     TempDir tmp;
-    AppController app{appOptions(tmp.dir)};
+    AppController app;
     MainPanelWindow window{app};
 
-    PanelOnScreen() {
+    explicit PanelOnScreen(AppController::Options (*options)(const juce::File&) = appOptions) : app(options(tmp.dir)) {
         app.onModelChanged = [this] { refresh(); };   // as the app does, through the tray icon
         window.addToDesktop();
         window.setTopLeftPosition(60, 120);
@@ -324,18 +371,111 @@ TEST_CASE("The panel stays up for the guide when the app loses the focus", "[ui]
     PanelOnScreen s;
     SECTION("the guide: held open (a prompt, the administrator dialog, System Settings)") {
         s.panel().showOnboarding();
-        s.window.activeStatusChanged(false);
+        s.window.activeStatusChanged(false, false);
         REQUIRE(s.window.isVisible());
         REQUIRE(s.panel().page() == MainPanel::Page::Onboarding);
-        s.window.activeStatusChanged(true);   // back: re-read, still open
+        s.window.activeStatusChanged(true, true);   // back: re-read, still open
         REQUIRE(s.window.isVisible());
     }
     SECTION("the settings and the panel: dismissed, as menu-bar extras are; reopened on the panel") {
         s.panel().showSettings();
         REQUIRE_FALSE(s.panel().holdsOpen());   // no driver operation started from them
-        s.window.activeStatusChanged(false);
+        s.window.activeStatusChanged(false, false);
         REQUIRE_FALSE(s.window.isVisible());
         REQUIRE(s.panel().page() == MainPanel::Page::Main);
+    }
+    SECTION("the focus went to another fixomic window (a plugin editor), the app still active: kept open") {
+        s.window.activeStatusChanged(false, true);
+        REQUIRE(s.window.isVisible());
+    }
+}
+
+// The editor windows are real ones on screen, the TestPlugins' generic editors. Focus changes are
+// reported by JUCE only to a foreground app (not to this test process): the window's response to
+// them is driven directly, as the app would see them.
+TEST_CASE("A plugin editor opens beside the panel, which stays open with the chain", "[ui][panel][gui]") {
+    PanelOnScreen s{withTestPlugins};
+    // At the right of the main display, as under a menu-bar icon: the editor fits at its left.
+    const auto* display = juce::Desktop::getInstance().getDisplays().getPrimaryDisplay();
+    REQUIRE(display != nullptr);
+    const auto userArea = display->userBounds.getSmallestIntegerContainer();
+    s.window.setTopLeftPosition(userArea.getRight() - MainPanel::kWidth - 40, userArea.getY() + 6);
+    auto& list = s.panel().chainList();
+    REQUIRE(list.slots().size() == 2);
+    REQUIRE(list.slots()[0].name == "fixomic editor A");
+    const auto panel = s.window.getScreenBounds();
+
+    clickName(list, 0);
+    pumpMessages(200);
+    auto* editor = editorWindow("fixomic editor A");
+    REQUIRE(editor != nullptr);
+    REQUIRE(s.window.isVisible());
+    REQUIRE(s.window.getScreenBounds() == panel);
+    REQUIRE_FALSE(s.window.hasKeyboardFocus(true));   // the editor took it
+
+    // At the panel's left, 8 pt apart, the tops (the editor's title bar) aligned.
+    const auto frame = frameOf(*editor);
+    CHECK_FALSE(frame.intersects(panel));
+    CHECK(frame.getRight() + 8 == panel.getX());
+    CHECK(frame.getY() == panel.getY());
+
+    SECTION("the editor has the focus, fixomic is still the foreground app: the panel stays") {
+        s.window.activeStatusChanged(false, true);   // as the app sees the editor take the focus
+        REQUIRE(s.window.isVisible());
+    }
+    SECTION("a second editor: 24 pt below the first, still beside the panel; the first one stays put") {
+        clickName(list, 1);
+        pumpMessages(200);
+        auto* second = editorWindow("fixomic editor B");
+        REQUIRE(second != nullptr);
+        const auto secondFrame = frameOf(*second);
+        REQUIRE(secondFrame.getRight() + 8 == panel.getX());
+        REQUIRE(secondFrame.getY() == frame.getY() + 24);
+        REQUIRE(frameOf(*editor) == frame);
+        clickName(list, 0);   // already open: to the front, not moved
+        pumpMessages(100);
+        REQUIRE(frameOf(*editor) == frame);
+        REQUIRE(s.window.isVisible());
+    }
+    SECTION("reordered while the editor is open: the slot moves, its editor stays open where it is") {
+        auto& row = *list.row(0);
+        const juce::Point<float> down{30.0f, 16.0f};
+        row.mouseDown(mouseAt(row, down, down, false));
+        row.mouseDrag(mouseAt(row, {30.0f, 30.0f}, down, true));
+        row.mouseDrag(mouseAt(row, {30.0f, 62.0f}, down, true));   // under the second row
+        row.mouseUp(mouseAt(row, {30.0f, 62.0f}, down, true));
+        REQUIRE(pumpUntil([&] { return list.slots()[0].name == "fixomic editor B"; }));
+        REQUIRE(s.app.slots()[1].name == "fixomic editor A");
+        REQUIRE(editorWindow("fixomic editor A") == editor);
+        REQUIRE(frameOf(*editor) == frame);
+        REQUIRE(s.window.isVisible());
+    }
+    SECTION("its slot removed: the editor closes, the panel stays") {
+        auto* remove = findChild<juce::Button>(*list.row(0), [](auto& b) { return b.getButtonText() == "Rimuovi fixomic editor A"; });
+        REQUIRE(remove != nullptr);
+        remove->onClick();
+        REQUIRE(editorWindow("fixomic editor A") == nullptr);
+        REQUIRE(pumpUntil([&] { return list.slots().size() == 1; }));
+        REQUIRE(s.window.isVisible());
+    }
+    SECTION("closed with its close button: the panel stays open with the keyboard focus, Escape closes it") {
+        editor->getPeer()->handleUserClosingWindow();   // what the title bar's close button does
+        pumpMessages(100);
+        REQUIRE(editorWindow("fixomic editor A") == nullptr);
+        REQUIRE(s.window.isVisible());
+        REQUIRE(juce::Component::getCurrentlyFocusedComponent() == &s.window);
+        s.press(juce::KeyPress::escapeKey);
+        REQUIRE_FALSE(s.window.isVisible());
+    }
+    SECTION("fixomic stops being the foreground app (the app-activation seam): the panel goes, the editor stays") {
+        s.window.appActiveChanged(false);
+        REQUIRE_FALSE(s.window.isVisible());
+        REQUIRE(editorWindow("fixomic editor A") == editor);
+    }
+    SECTION("... unless the panel holds itself open: another process's prompt is up") {
+        s.panel().showOnboarding();
+        s.window.appActiveChanged(false);
+        REQUIRE(s.window.isVisible());
     }
 }
 

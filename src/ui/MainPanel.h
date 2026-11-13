@@ -1,5 +1,6 @@
 #pragma once
 
+#include "platform/mac/AppActivation.h"
 #include "ui/ChainList.h"
 #include "ui/Onboarding.h"
 #include "ui/PanelParts.h"
@@ -158,12 +159,40 @@ private:
 juce::Rectangle<int> panelWindowBounds(std::optional<juce::Rectangle<int>> anchor, juce::Point<int> mouse,
                                        juce::Rectangle<int> userArea, int width, int preferredHeight);
 
+// Where a plugin editor window opens while the panel window is on screen at `panel`: the top-left of
+// the editor's frame (title bar included) of `frameSize`, beside the panel, inside the user area of
+// the panel's display (of `userAreas`, one per display, the one holding most of the panel; at least
+// one). At the panel's left, 8 pt apart; if it does not fit there, at its right; if it fits on neither
+// side, at the user area's left edge (over the panel). Its top is the panel's; a further editor's
+// (`previousTop`: the top of the editor opened before it, still open) 24 pt below that one's. Always
+// clamped vertically inside the user area (its title bar at the top when it is taller).
+juce::Point<int> editorBesidePanel(juce::Rectangle<int> panel, const std::vector<juce::Rectangle<int>>& userAreas,
+                                   juce::Point<int> frameSize, std::optional<int> previousTop);
+
+// Whether the panel window, on screen, stays open when it stops being the active window or fixomic
+// stops being the foreground app: while fixomic is still the foreground app (the focus went to one of
+// its plugin editors, or came back from one), and while the panel holds itself open
+// (MainPanel::holdsOpen(): the administrator dialog and the microphone prompt belong to other
+// processes, so the app is not the foreground one then).
+bool panelStaysOpen(bool appActive, bool heldOpen);
+
 // The borderless, rounded, shadowed window the panel lives in, under the menu-bar icon, like the
-// system's menu-bar extras: it hides itself on Esc (an Esc first cancels a drag in the chain list,
-// then closes the plugin picker, then the settings or the guide, if any is going on) and when it stops
-// being the active window (a click elsewhere), unless the panel holds it open (holdsOpen()); it
-// reopens on the chain list. Becoming active again re-reads the open view's data.
-// Never taller than the display (panelWindowBounds): a longer panel (a long chain) scrolls.
+// system's menu-bar extras. It hides itself on Esc (an Esc first cancels a drag in the chain list,
+// then closes the plugin picker, then the settings or the guide, if any is going on) and when fixomic
+// stops being the foreground app (a click on another app or on the desktop, even while a plugin
+// editor has the focus), unless the panel holds it open (panelStaysOpen); the focus going to one of
+// fixomic's plugin editors and back leaves it open. It reopens on the chain list. Becoming active
+// again re-reads the open view's data. Never taller than the display (panelWindowBounds): a longer
+// panel (a long chain) scrolls.
+//
+// Plugin editors (through the AppController's editor hooks; one panel window per AppController): one
+// opened while the panel is on screen goes beside it (editorBesidePanel), one opened while it is not
+// goes where PluginWindows puts it by default. Closing an editor with its title-bar button while the
+// panel is on screen gives the panel the keyboard focus back, before the editor hides.
+//
+// The app leaving the foreground while an editor, not the panel, is the key window does not reach
+// activeWindowStatusChanged() (the panel is no longer active by then): an AppActivationObserver
+// reports it to appActiveChanged().
 class MainPanelWindow : public juce::TopLevelWindow {
 public:
     explicit MainPanelWindow(AppController&);
@@ -177,9 +206,12 @@ public:
     // A click on the icon that made the panel lose focus arrives right after the dismissal: it
     // must close the panel, not reopen it.
     bool dismissedJustNow() const;
-    // The window became active (re-read the open view's data) or stopped being it (hide, unless the
-    // panel holds it open). Called by activeWindowStatusChanged().
-    void activeStatusChanged(bool active);
+    // The window became active (re-read the open view's data) or stopped being it, with fixomic still
+    // the foreground app or not (hide, unless panelStaysOpen). Called by activeWindowStatusChanged().
+    void activeStatusChanged(bool windowActive, bool appActive);
+    // fixomic became or stopped being the foreground app (hide, unless panelStaysOpen). Called by the
+    // AppActivationObserver.
+    void appActiveChanged(bool active);
 
     static constexpr double kReopenGuardMs = 300.0;
 
@@ -191,11 +223,18 @@ private:
     void activeWindowStatusChanged() override;
     void place();
     void fitPanel();   // the panel at its preferred height
+    // The editor hooks: where a new editor opens (nullopt while the panel is not on screen), and the
+    // user closing one.
+    std::optional<juce::Point<int>> editorPosition(juce::Point<int> frameSize,
+                                                   std::optional<juce::Rectangle<int>> previousFrame) const;
+    void editorClosing();
 
+    AppController& app_;
     MainPanel panel_;
     juce::Viewport viewport_;
     std::optional<juce::Rectangle<int>> anchor_;
     double dismissedAt_ = -1.0e9;
+    mac::AppActivationObserver activation_{[this](bool active) { appActiveChanged(active); }};   // last: goes first
 };
 
 } // namespace fixomic::ui
