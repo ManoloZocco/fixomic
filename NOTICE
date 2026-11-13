@@ -4,9 +4,9 @@ Licensed under the GNU Affero General Public License v3.0 or later (see LICENSE)
 
 fixomic.app carries a copy of every licence listed under "Distributed in fixomic.app" in
 Contents/Resources/Licenses (scripts/package-release.sh puts them there). The source of everything
-listed is in this repository or fetched by its build: cmake/Dependencies.cmake (JUCE, and Catch2
-for the tests), scripts/build-webrtc-apm.sh (WebRTC audio processing), the driver/BlackHole
-submodule.
+listed is in fixomic's repository, https://github.com/ManoloZocco/fixomic, or fetched by its build:
+cmake/Dependencies.cmake (JUCE, and Catch2 for the tests), scripts/build-webrtc-apm.sh (WebRTC
+audio processing), the driver/BlackHole submodule.
 
 
 Distributed in fixomic.app
