@@ -214,7 +214,8 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
   knob; focus ring in accent at 45 %; 40 % when disabled. The button text is its accessible name.
 - **Push button**: control fill, 1 px edge, 6 pt radius, caption text; hover / pressed overlay ink
   at 5 % / 10 %.
-- **Flat button** (`fixomic.style = flat`): text only; hover fill = hover step.
+- **Flat button** (`fixomic.style = flat`): text only (Body); hover fill = hover step. `flat-caption`:
+  the same at caption size, beside a push button ("Salta").
 - **Notice** (`NoticeRow`): amber tint (13 % light / 16 % dark) at 8 pt radius, caption text, an
   "Apri Impostazioni" push button when a System Settings pane fixes it (a denied or silent system
   audio tap; none when the tap could not be created). More than two startup
@@ -248,19 +249,26 @@ rounded. Station markers are 11 pt circles with a 2 pt ring of ground where they
   right ("Installato · v0.1.0" / "Non installato"), push buttons "Installa driver" or "Aggiorna
   driver (vX → vY)" and "Disinstalla driver", the latter confirmed inline (a caption sentence, then
   "Disinstalla" / "Annulla"), one caption line for "Operazione in corso…" (buttons at 40 %), the
-  result, or the error in Line Red; **Permessi** with "Consentito / Negato / Non ancora chiesto" for
-  the microphone and "Consentito / Negato / Non noto / Probabilmente negato" for system audio (never
-  "denied" when unknown; a caption note says macOS does not tell), an "Apri Impostazioni di Sistema"
-  push button under each one not granted; then "Rivedi la configurazione iniziale" (flat). Esc or ‹
+  result, or the error in Line Red (a result that arrived while the view was closed shows at its next
+  opening, once); **Permessi** with "Consentito / Negato / Non ancora chiesto" for the microphone and
+  "Consentito / Negato / Non noto / Probabilmente negato" for system audio (never "denied" when
+  unknown; a caption note says macOS does not tell); under the microphone a "Consenti il microfono"
+  push button while macOS has not asked (System Settings does not list fixomic yet), "Apri
+  Impostazioni di Sistema" once denied; under system audio "Apri Impostazioni di Sistema" unless
+  granted; then "Rivedi la configurazione iniziale" (flat). Esc or ‹
   go back to the panel.
 - **First-run guide** (`Onboarding`): replaces the whole panel; "‹ Configurazione iniziale", a
   caption line, then the four steps as a vertical route: 18 pt stations on a 2 pt track-coloured
   line, each with a 2 pt ring of ground. Done = filled in ink with a ground check, what was set up
   under the name in secondary caption; open = 2 pt ink ring with its number, the name in Body
   Strong, its explanation in secondary caption and its actions (a push button: ask, open System
-  Settings, install, "Fine"; "Salta" flat after it; the microphone choice list for step 1); to do =
-  1.5 pt tertiary ring and number, name in secondary ink; blocked = Line Red disc with a ground "!".
-  Panel-only, no modal: it keeps the panel up while the app loses focus to a system prompt.
+  Settings, install, "Fine"; "Salta" after it, flat at the button's caption size; the microphone
+  choice list for step 1; above the buttons, one caption line in Line Red for a driver error or "La
+  richiesta non è riuscita: riprova." after a failed system audio request); to do = 1.5 pt tertiary
+  ring and number, name in secondary ink; blocked = Line Red disc with a ground "!". Panel-only, no
+  modal: it keeps the panel up while the app loses focus to a system prompt. It opens by itself only
+  on a first launch (no config, or an old one never set up); closed early, it is only the reminder
+  row from then on.
 - **Choice list** (`ChoiceList`): 28 pt rows reaching the flat inset past the content edges; a 1.6 pt
   ink check at the content edge on the chosen row, the text 20 pt in (Body; secondary ink when
   dimmed); the flat button's hover fill; rows are radio buttons for accessibility.
