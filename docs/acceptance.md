@@ -310,6 +310,36 @@ chiusura del programma.
   più basso del microfono crudo perché `VoiceProcessingIO` applica la sua riduzione del rumore e
   abbassa l'altro audio (il programma) mentre è attiva.
 
+## Verifiche dopo la revisione finale (13/11/2026, mattina)
+
+Le correzioni della revisione finale sono state provate prima solo con i test silenziosi, perché di notte
+non si potevano fare prove con suono. Queste sono le verifiche sul Mac, fatte dal controller con la build
+Debug a `85035be`, le cuffie HyperX sul jack e i volumi al massimo.
+
+| Verifica | Esito |
+|---|---|
+| Driver reinstallato (un solo riavvio di coreaudiod) | ✅ servizi audio calmi prima e dopo, nessuna tempesta di notifiche |
+| fixomic Mic può essere l'ingresso predefinito, la Bridge no | ✅ Mic `CanBeDefaultDevice` 1, non nascosto; Bridge 0 / 0, nascosta; ingresso e uscita predefiniti invariati (*Microfono MacBook Air*, *Cuffie esterne*) |
+| `fxprobe check-driver` | ✅ 5 controlli su 5 (loopback a 0 campioni, silenzio senza scrittore, richiesta, 44,1 kHz rifiutati) |
+| Il volume di ingresso non abbassa più fixomic Mic | ✅ con il cursore a 0 la registrazione resta a −20,9 dBFS RMS (−22,5 con il cursore a 1; rumore di un phon nella stanza). Il cursore c'è ancora, ma non fa nulla |
+| fixomic Mic dal vivo | ✅ segnale continuo, 0 discontinuità, latenza mostrata 30,10 ms |
+| Test `[hardware]` e `[gui]` | ✅ 24 su 24 (286 asserzioni), più i 198 silenziosi |
+| Ripresa dell'eco dopo il bypass globale | ✅ a ogni ripresa un solo tratto di zeri di 27,0 ms, 7–13 ms dopo il comando, poi una rampa di circa 20 ms; nessun buco altrove, nessun resto di audio vecchio |
+| Avvio interrotto mentre carica i plugin | ✅ con il segnale lasciato dall'avvio precedente: *Nectar 4 Gate* caricato come mancante, l'avviso in italiano, segnale tolto, stato del plugin conservato; all'avvio dopo il plugin torna |
+| Driver incluso modificato | ✅ una copia dell'app con il driver alterato rifiuta l'installazione con "La firma del driver incluso nell'app non è valida: installazione rifiutata (main executable failed strict validation)", senza aprire la finestra di amministratore. Il driver dell'app vera supera lo stesso controllo |
+
+Non verificati dal vivo:
+- **Ripiego senza tap dell'audio di sistema.** Non ho trovato un modo di far fallire su comando il dispositivo
+  aggregato con il tap. Il test `[hardware]` lo copre con un aggregato reale senza tap, dopo un fallimento simulato
+  del primo tentativo.
+- **Microfono staccato e riattaccato.** Serve staccare il jack, ed è nel punto 6 per l'utente.
+- **Installazione completa dall'app con il nuovo controllo della firma.** Vuole l'autenticazione dell'utente. Il
+  flusso era già stato provato il 12/11, e il controllo della firma passa con il driver dell'app.
+
+Un'osservazione, non un errore: fixomic limita l'uscita a ±1, ma a segnale già al limite (il phon vicino al
+microfono) fixomic Mic ha dato 36 campioni fino a 1,037. È il ricampionamento della compensazione della deriva
+sulla Bridge dentro l'aggregato. È innocuo: i campioni sono float, e chi li converte li limita a ±1.
+
 ## Da fare dall'utente
 
 Queste prove richiedono una persona: un secondo ascoltatore in Discord, l'ascolto a orecchio, lo
@@ -353,6 +383,8 @@ stop del Mac e le cuffie da staccare. 11b non le ha eseguite.
 2. Stacca le cuffie dal jack per circa 10 s mentre parli. L'ascoltatore deve sentire silenzio (mai
    rumore, mai il microfono del Mac); l'icona di fixomic segnala il microfono mancante.
 3. Riattacca le cuffie e parla: la voce deve riprendere da sola.
+4. Con le cuffie staccate, guarda in Impostazioni di Sistema → Suono → Ingresso: macOS non deve aver
+   scelto *fixomic Mic* come microfono predefinito. Ora fixomic Mic può esserlo, quindi va controllato.
 
 **Punto 7, il pallino arancione.**
 1. In chiamata il pallino arancione del microfono è acceso nella barra dei menu.
