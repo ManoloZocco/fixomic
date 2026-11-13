@@ -287,3 +287,122 @@ TEST_CASE("driver operations run off the main thread, one at a time, and complet
     REQUIRE(results[2].first);
     REQUIRE(results[2].second.isEmpty());
 }
+
+// ---- final review fixes: the bundled driver's signature, NSAppleScript's outcome -----------------
+
+namespace {
+
+// Runs a tool and returns its exit code (output discarded).
+int runTool(const juce::StringArray& args)
+{
+    juce::ChildProcess process;
+    if (!process.start(args, juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
+        return -1;
+    process.readAllProcessOutput();
+    process.waitForProcessToFinish(30000);
+    return static_cast<int>(process.getExitCode());
+}
+
+// A minimal driver-like bundle: the fixomic bundle id and a copy of /usr/bin/true as its
+// executable, signed ad-hoc unless `sign` is false.
+juce::File makeDriverBundle(const juce::File& bundle, bool sign)
+{
+    REQUIRE(bundle.getChildFile("Contents/MacOS").createDirectory());
+    REQUIRE(bundle.getChildFile("Contents/Info.plist").replaceWithText(
+        juce::String("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                     "<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" "
+                     "\"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n"
+                     "<plist version=\"1.0\"><dict>"
+                     "<key>CFBundleIdentifier</key><string>")
+        + mac::kDriverBundleId
+        + "</string><key>CFBundleExecutable</key><string>fixomic</string>"
+          "<key>CFBundlePackageType</key><string>BNDL</string></dict></plist>\n"));
+    const auto executable = bundle.getChildFile("Contents/MacOS/fixomic");
+    REQUIRE(juce::File("/usr/bin/true").copyFileTo(executable));
+    REQUIRE(runTool({"/usr/bin/codesign", "--remove-signature", executable.getFullPathName()}) == 0);
+    if (sign)
+        REQUIRE(runTool({"/usr/bin/codesign", "--force", "--sign", "-", bundle.getFullPathName()}) == 0);
+    return bundle;
+}
+
+} // namespace
+
+TEST_CASE("the installer refuses a bundled driver whose signature does not verify", "[driver][installer]")
+{
+    const TempDirectory temp("fixomic signature test");
+    REQUIRE(temp.root.createDirectory());
+    const juce::String destination = temp.root.getChildFile("HAL/fixomic.driver").getFullPathName();
+    std::vector<juce::String> scripts;
+    script::Result answer{true, false, {}};
+    const auto runner = [&](const juce::String& source) {
+        scripts.push_back(source);
+        return answer;
+    };
+    const juce::String refused = juce::String::fromUTF8("La firma del driver incluso nell'app non è valida");
+
+    SECTION("signed and intact: verified, then the install script runs")
+    {
+        const auto bundle = makeDriverBundle(temp.root.getChildFile("signed/fixomic.driver"), true);
+        REQUIRE(script::verifySignature(bundle).isEmpty());
+        REQUIRE(script::installFrom(bundle, destination, runner).isEmpty());
+        REQUIRE(scripts.size() == 1);
+        REQUIRE(scripts[0] == script::install(bundle.getFullPathName(), destination));
+
+        answer = {false, true, "User canceled."};
+        REQUIRE(script::installFrom(bundle, destination, runner) == "Installazione annullata");
+        answer = {false, false, "boom"};
+        REQUIRE(script::installFrom(bundle, destination, runner) == "Installazione del driver non riuscita: boom");
+    }
+    SECTION("changed after signing: refused, no script")
+    {
+        const auto bundle = makeDriverBundle(temp.root.getChildFile("tampered/fixomic.driver"), true);
+        REQUIRE(bundle.getChildFile("Contents/MacOS/fixomic").appendText("tampered"));
+        const auto error = script::verifySignature(bundle);
+        REQUIRE(error.startsWith(refused));
+        REQUIRE(error.endsWith(")"));   // codesign's own message, in parentheses
+        REQUIRE(script::installFrom(bundle, destination, runner).startsWith(refused));
+        REQUIRE(scripts.empty());
+    }
+    SECTION("not signed at all: refused, no script")
+    {
+        const auto bundle = makeDriverBundle(temp.root.getChildFile("unsigned/fixomic.driver"), false);
+        REQUIRE(script::verifySignature(bundle).startsWith(refused));
+        REQUIRE(script::installFrom(bundle, destination, runner).startsWith(refused));
+        REQUIRE(scripts.empty());
+    }
+    SECTION("missing or not the fixomic driver: refused before the signature is even checked")
+    {
+        REQUIRE(script::installFrom(temp.root.getChildFile("nothing/fixomic.driver"), destination, runner)
+                    .startsWith(juce::String::fromUTF8("Il driver non è incluso nell'app")));
+        const auto other = temp.root.getChildFile("other/fixomic.driver");
+        REQUIRE(other.getChildFile("Contents").createDirectory());
+        REQUIRE(other.getChildFile("Contents/Info.plist").replaceWithText("not a plist"));
+        REQUIRE(script::installFrom(other, destination, runner)
+                    .startsWith(juce::String::fromUTF8("Il driver incluso nell'app non è valido")));
+        REQUIRE(scripts.empty());
+    }
+}
+
+TEST_CASE("driver_script::interpret never counts a missing script or result as a success", "[driver][installer]")
+{
+    REQUIRE(script::interpret(true, true, false, 0, {}).ok);
+
+    const auto noScript = script::interpret(false, false, false, 0, {});
+    REQUIRE_FALSE(noScript.ok);
+    REQUIRE_FALSE(noScript.cancelled);
+    REQUIRE(noScript.message.isNotEmpty());
+
+    const auto noResult = script::interpret(true, false, false, 0, {});
+    REQUIRE_FALSE(noResult.ok);
+    REQUIRE_FALSE(noResult.cancelled);
+    REQUIRE(noResult.message.isNotEmpty());
+    REQUIRE(noResult.message != noScript.message);
+
+    const auto cancelled = script::interpret(true, false, true, -128, "User canceled.");
+    REQUIRE_FALSE(cancelled.ok);
+    REQUIRE(cancelled.cancelled);
+    REQUIRE(cancelled.message == "User canceled.");
+
+    REQUIRE(script::interpret(true, false, true, 7, {}).message == "errore AppleScript 7");
+    REQUIRE_FALSE(script::interpret(true, true, true, 7, "x").ok);   // error information wins
+}

@@ -36,7 +36,8 @@ bool isDriverUpdate(const juce::String& bundled, const juce::String& installed);
 // authorization dialog gives "Installazione annullata" / "Disinstallazione annullata".
 using DriverCompletion = std::function<void(bool ok, juce::String error)>;
 
-// Copies the bundled driver over kInstalledDriverPath through NSAppleScript "do shell script ...
+// Checks the bundled driver (driver_script::installFrom: a directory, the fixomic bundle id, a valid
+// code signature), then copies it over kInstalledDriverPath through NSAppleScript "do shell script ...
 // with administrator privileges" (rm + ditto, quarantine removed from the copy, chown root:wheel,
 // then coreaudiod restarted with killall, or launchctl kickstart if killall fails), then waits up to
 // kDriverWaitSeconds for fixomic Mic to appear. Everything runs on a background queue: the
@@ -73,6 +74,26 @@ struct Result {
 };
 // Compiles and runs `source` with NSAppleScript. Blocking; any thread.
 Result run(const juce::String& source);
+
+// How run() reads NSAppleScript's outcome: ok only for a script that was created and returned a
+// result descriptor without error information. A script that could not be created, or no result
+// and no error, is a failure with a message, never a success. errorNumber / errorMessage are read
+// only with hasErrorInfo (-128 = the user cancelled).
+Result interpret(bool scriptCreated, bool descriptorReturned, bool hasErrorInfo, int errorNumber,
+                 const juce::String& errorMessage);
+
+// `/usr/bin/codesign --verify --strict <bundle>`: "" when the bundle's code signature is valid,
+// otherwise an Italian error ending with codesign's own message in parentheses. Blocking (runs
+// codesign, up to 30 s); any thread.
+juce::String verifySignature(const juce::File& bundle);
+
+// installDriverAsync's work up to the privileged copy: `source` must be a directory with the fixomic
+// bundle id (kDriverBundleId) and a valid code signature (verifySignature); only then is the install
+// script (install(source, destination)) handed to `runScript` (run() in the app), so a refused
+// driver never reaches root. "" once the script ran; otherwise the Italian error ("Installazione
+// annullata" when the user cancelled the authorization).
+juce::String installFrom(const juce::File& source, const juce::String& destination,
+                         const std::function<Result(const juce::String& script)>& runScript);
 
 // The machinery of installDriverAsync / uninstallDriverAsync: runs `work` (returns the error, ""
 // on success) on a background queue, at most one at a time (otherwise fails at once), and calls

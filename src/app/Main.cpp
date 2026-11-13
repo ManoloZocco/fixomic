@@ -15,8 +15,8 @@
 
 // Command line: only the plugin scan worker, `--scan-worker:<pipe>`, launched by PluginCatalog.
 //
-// Developer commands exist only when FIXOMIC_DEV_COMMANDS is 1 (CMake: every configuration except
-// Release). At launch they run once the event loop runs. They are also forwarded to the running
+// Developer commands exist only when FIXOMIC_DEV_COMMANDS is 1 (CMake: Debug builds only). At launch
+// they run once the event loop runs. They are also forwarded to the running
 // instance when the binary is launched again (JUCE passes a second launch's command line to
 // anotherInstanceStarted()); results go to the running instance's stderr:
 //

@@ -1,9 +1,11 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "app/AppController.h"
+#include "ui/ChainModel.h"
 #include "ui/MainPanel.h"
 #include "ui/SetupModel.h"
 #include "core/Config.h"
+#include "core/ConfigStore.h"
 
 #include <CoreFoundation/CoreFoundation.h>
 
@@ -369,5 +371,62 @@ TEST_CASE("AppController says whether the loaded config stated the onboarding fl
         AppController next{appOptions(tmp.dir)};
         REQUIRE(next.onboardingFlagStored());
         REQUIRE(atLaunch(next) == LaunchGuide::None);
+    }
+}
+
+// A plugin that crashes while the chain is restored would kill every launch (silently, at login).
+// The controller marks the restore in the config folder; a marker left by a launch that died there
+// makes the next launch restore the chain without loading any plugin.
+TEST_CASE("AppController restores the chain without plugins after a launch that died loading them", "[ui][app]") {
+    juce::ScopedJuceInitialiser_GUI gui;
+    TempDir tmp;
+    const auto file = tmp.dir.getChildFile("config.xml");
+    const auto marker = tmp.dir.getChildFile(AppController::kRestoreMarkerName);
+    {
+        fixomic::Config c;
+        c.inputDeviceUid = "no-such-mic";
+        c.onboardingDone = true;
+        fixomic::PluginSlot slot;
+        slot.descriptionXml = appleEffect("AUDelay", "dely").createXml()->toString();
+        c.chain.push_back(slot);
+        REQUIRE(fixomic::ConfigStore(file).save(c));
+    }
+    const juce::String interrupted = utf8("L’ultimo avvio si è interrotto caricando i plugin: la catena "
+                                          "è stata caricata senza plugin.");
+
+    SECTION("a normal launch loads the plugins and leaves no marker") {
+        AppController app{appOptions(tmp.dir)};
+        REQUIRE(app.slots().size() == 1);
+        REQUIRE_FALSE(app.slots()[0].missing);
+        REQUIRE(app.startupWarnings().empty());
+        REQUIRE_FALSE(marker.exists());
+    }
+    SECTION("after an interrupted launch: every slot missing (removable), one warning, plugins back next time") {
+        REQUIRE(marker.create());
+        {
+            AppController app{appOptions(tmp.dir)};
+            const auto slots = app.slots();
+            REQUIRE(slots.size() == 1);
+            REQUIRE(slots[0].missing);
+            REQUIRE(slots[0].name == "AUDelay");
+            REQUIRE(slotDetail(slots[0]) == "Plugin non trovato");
+            REQUIRE(app.startupWarnings().size() == 1);
+            REQUIRE(app.startupWarnings()[0].startsWith(interrupted));
+            REQUIRE_FALSE(marker.exists());   // this launch got through
+            app.removePlugin(0);              // the user can take it out
+            REQUIRE(app.slots().empty());
+            app.saveNow();
+        }
+        AppController next{appOptions(tmp.dir)};
+        REQUIRE(next.slots().empty());   // removed for good
+        REQUIRE(next.startupWarnings().empty());
+    }
+    SECTION("after an interrupted launch the slots keep what was saved: the next launch loads them again") {
+        REQUIRE(marker.create());
+        { AppController app{appOptions(tmp.dir)}; }   // quits without touching the chain (saves it)
+        AppController next{appOptions(tmp.dir)};
+        REQUIRE(next.slots().size() == 1);
+        REQUIRE_FALSE(next.slots()[0].missing);
+        REQUIRE(next.startupWarnings().empty());
     }
 }

@@ -176,8 +176,8 @@ target_sources(fixomic PRIVATE src/app/Main.cpp)
 target_compile_definitions(fixomic PRIVATE
     JUCE_APPLICATION_NAME_STRING="$<TARGET_PROPERTY:fixomic,JUCE_PRODUCT_NAME>"
     JUCE_APPLICATION_VERSION_STRING="${PROJECT_VERSION}"
-    # Developer command-line options (src/app/Main.cpp): every configuration except Release.
-    FIXOMIC_DEV_COMMANDS=$<IF:$<CONFIG:Release>,0,1>
+    # Developer command-line options (src/app/Main.cpp): Debug builds only.
+    FIXOMIC_DEV_COMMANDS=$<IF:$<CONFIG:Debug>,1,0>
 )
 # Code signing. Ad-hoc signatures change with every build, and macOS then asks for the microphone
 # and system-audio permissions again; a stable identity keeps the grants across rebuilds. Default:

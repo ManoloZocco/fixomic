@@ -36,7 +36,11 @@ namespace fixomic {
 // never stays Running on the IO of the old daemon.
 //
 // Startup: config loaded, chain prepared for 48 kHz / config.bufferSize and then restored (plugins
-// that fail to load stay as missing slots, see startupWarnings()), engine configured, demand
+// that fail to load stay as missing slots, see startupWarnings()). While the plugins load, an empty
+// file kRestoreMarkerName sits next to the config file; if a launch finds it, the previous one died
+// loading them (a crashing plugin), so this one restores the chain with every slot missing ("Plugin
+// non trovato", removable, the saved description and state kept for the next launch) and reports
+// it with interruptedRestoreWarning() as its startup warning. Then the engine is configured, demand
 // monitoring started, an incremental plugin scan started in the background. A 200 ms timer drives
 // EngineController::tick(), PluginChain::collectGarbage() and the debounced config save, and
 // notifies when the AEC starts or stops processing (it changes latency()).
@@ -108,6 +112,8 @@ public:
     juce::String addPlugin(const juce::PluginDescription&);
     // "Impossibile caricare «Nectar 4 Gate»." ("… il plugin." without a name).
     static juce::String pluginLoadFailedText(const juce::String& pluginName);
+    // The startup warning after a launch that died loading the chain's plugins.
+    static juce::String interruptedRestoreWarning();
     void removePlugin(int index);              // closes its editor first
     void movePlugin(int from, int to);
     void setPluginBypassed(int index, bool);
@@ -173,6 +179,8 @@ public:
     static constexpr double kSaveDebounceMs = 1000.0;
     static constexpr double kSaveMaxDelayMs = 10000.0;
     static constexpr int kFlushWaitMs = 50;   // max wait for the audio thread's VST3 flush on save
+    // Next to the config file while the chain's plugins load at startup (see the class comment).
+    static constexpr const char* kRestoreMarkerName = "restoring-plugins";
 
 private:
     void timerCallback() override;
@@ -183,6 +191,7 @@ private:
     void driverOperationDone(bool ok, const juce::String& error, int restartsBefore, const DriverCompletion&);
     void handleServiceRestart();
     void rememberInputName();   // stores the configured microphone's name when it is not stored yet
+    void restoreChain();        // the chain from config_, guarded by the restore marker
 
     ConfigStore store_;
     bool onboardingFlagStored_ = false;   // declared before config_: set while config_ loads

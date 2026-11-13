@@ -53,7 +53,7 @@ AppController::AppController(Options options)
     // prepares both again on its first open).
     chain_.prepare(kSampleRate, config_.bufferSize);
     aec_.prepare(kSampleRate, config_.bufferSize);
-    startupWarnings_ = chain_.restore(config_.chain, catalog_.factory());
+    restoreChain();
 
     chain_.onChanged = [this] { post([](AppController& c) { c.changed(); }); };
     chain_.onPluginStateChanged = [this] { post([](AppController& c) { c.scheduleSave(); }); };
@@ -104,6 +104,36 @@ AppController::~AppController() {
     engine_.onStateChanged = nullptr;
     chain_.onChanged = nullptr;
     chain_.onPluginStateChanged = nullptr;
+}
+
+juce::String AppController::interruptedRestoreWarning() {
+    return juce::String::fromUTF8("L\u2019ultimo avvio si \u00e8 interrotto caricando i plugin: la catena \u00e8 "
+                                  "stata caricata senza plugin. Togli quello che d\u00e0 problemi: al prossimo "
+                                  "avvio fixomic prover\u00e0 di nuovo a caricarli.");
+}
+
+void AppController::restoreChain() {
+    // A plugin that crashes while loading would kill every launch (silently, with launch at login).
+    // The marker exists only while the plugins load: found at launch, the last one died there.
+    const auto marker = store_.file().getSiblingFile(kRestoreMarkerName);
+    if (marker.existsAsFile()) {
+        // Every slot missing: shown as "Plugin non trovato", removable, its saved description and state
+        // kept, so the next launch tries again.
+        const PluginFactory none = [](const juce::PluginDescription&, double, int, juce::String& error) {
+            error = "not loaded: the last launch was interrupted while loading the plugins";
+            return std::unique_ptr<juce::AudioPluginInstance>();
+        };
+        chain_.restore(config_.chain, none);
+        startupWarnings_ = {interruptedRestoreWarning()};
+        if (!marker.deleteFile()) juce::Logger::writeToLog("cannot remove " + marker.getFullPathName());
+        return;
+    }
+    if (config_.chain.empty()) return;   // nothing to load, nothing to guard
+    // Written before the first plugin loads; if it cannot be written the chain loads unguarded.
+    if (!marker.getParentDirectory().createDirectory() || !marker.create())
+        juce::Logger::writeToLog("cannot write " + marker.getFullPathName() + ": restoring the chain unguarded");
+    startupWarnings_ = chain_.restore(config_.chain, catalog_.factory());
+    marker.deleteFile();
 }
 
 // ---- callbacks --------------------------------------------------------------------------------

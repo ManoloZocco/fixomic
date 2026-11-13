@@ -128,17 +128,9 @@ bool driverOperationInProgress()
 void installDriverAsync(DriverCompletion completion)
 {
     driver_script::runOperation(std::move(completion), [] () -> juce::String {
-        const auto source = bundledDriverLocation();
-        if (!source.isDirectory())
-            return text("Il driver non \u00e8 incluso nell'app (") + source.getFullPathName() + ")";
-        if (plistValue(source, @"CFBundleIdentifier") != kDriverBundleId)
-            return text("Il driver incluso nell'app non \u00e8 valido (") + source.getFullPathName() + ")";
-
-        const auto result = driver_script::run(driver_script::install(source.getFullPathName(), kInstalledDriverPath));
-        if (result.cancelled)
-            return "Installazione annullata";
-        if (!result.ok)
-            return "Installazione del driver non riuscita: " + result.message;
+        const auto error = driver_script::installFrom(bundledDriverLocation(), kInstalledDriverPath, driver_script::run);
+        if (error.isNotEmpty())
+            return error;
         if (!waitForMic(true))
             return text("Il driver \u00e8 stato installato, ma fixomic Mic non \u00e8 comparso entro ")
                    + juce::String(static_cast<int>(kDriverWaitSeconds)) + " secondi. Riavvia il Mac se non compare.";
@@ -218,6 +210,49 @@ juce::String uninstall(const juce::String& destination, Options options)
     return script;
 }
 
+juce::String verifySignature(const juce::File& bundle)
+{
+    const juce::String refused = text("La firma del driver incluso nell'app non \u00e8 valida: installazione "
+                                      "rifiutata (");
+    juce::ChildProcess codesign;
+    if (!codesign.start(juce::StringArray{"/usr/bin/codesign", "--verify", "--strict", bundle.getFullPathName()},
+                        juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
+        return refused + "codesign non avviato)";
+    const juce::String output = codesign.readAllProcessOutput().trim();
+    if (!codesign.waitForProcessToFinish(30000)) {
+        codesign.kill();
+        return refused + "codesign non ha risposto)";
+    }
+    if (codesign.getExitCode() == 0)
+        return {};
+    // "<path>: <reason>": the path is already known, the reason is what helps.
+    juce::String reason = output.upToFirstOccurrenceOf("\n", false, false);
+    if (reason.startsWith(bundle.getFullPathName() + ": "))
+        reason = reason.fromFirstOccurrenceOf(": ", false, false);
+    if (reason.isEmpty())
+        reason = "codesign: uscita " + juce::String(static_cast<int>(codesign.getExitCode()));
+    return refused + reason + ")";
+}
+
+juce::String installFrom(const juce::File& source, const juce::String& destination,
+                         const std::function<Result(const juce::String&)>& runScript)
+{
+    if (!source.isDirectory())
+        return text("Il driver non \u00e8 incluso nell'app (") + source.getFullPathName() + ")";
+    if (plistValue(source, @"CFBundleIdentifier") != kDriverBundleId)
+        return text("Il driver incluso nell'app non \u00e8 valido (") + source.getFullPathName() + ")";
+    // Before root copies it: a bundle that was changed (or never signed) is not installed.
+    if (const auto signature = verifySignature(source); signature.isNotEmpty())
+        return signature;
+
+    const auto result = runScript(install(source.getFullPathName(), destination));
+    if (result.cancelled)
+        return "Installazione annullata";
+    if (!result.ok)
+        return "Installazione del driver non riuscita: " + result.message;
+    return {};
+}
+
 void runOperation(DriverCompletion completion, std::function<juce::String()> work)
 {
     if (operationRunning.exchange(true)) {
@@ -233,22 +268,36 @@ void runOperation(DriverCompletion completion, std::function<juce::String()> wor
     });
 }
 
+Result interpret(bool scriptCreated, bool descriptorReturned, bool hasErrorInfo, int errorNumber,
+                 const juce::String& errorMessage)
+{
+    Result result;
+    if (!scriptCreated) {
+        result.message = text("lo script di installazione non \u00e8 stato creato");
+        return result;
+    }
+    if (hasErrorInfo) {
+        result.cancelled = errorNumber == -128;   // userCanceledErr
+        result.message = errorMessage.isNotEmpty() ? errorMessage : "errore AppleScript " + juce::String(errorNumber);
+        return result;
+    }
+    if (!descriptorReturned) {
+        result.message = "lo script non ha dato alcun risultato";
+        return result;
+    }
+    result.ok = true;
+    return result;
+}
+
 Result run(const juce::String& source)
 {
     @autoreleasepool {
-        NSAppleScript* script = [[NSAppleScript alloc] initWithSource:toNs(source)];
+        NSString* sourceText = toNs(source);   // nil for a string NSString cannot take
+        NSAppleScript* script = sourceText != nil ? [[NSAppleScript alloc] initWithSource:sourceText] : nil;
         NSDictionary* errorInfo = nil;
-        [script executeAndReturnError:&errorInfo];
-        Result result;
-        if (errorInfo == nil) {
-            result.ok = true;
-            return result;
-        }
-        result.cancelled = [errorInfo[NSAppleScriptErrorNumber] intValue] == -128;   // userCanceledErr
-        result.message = toJuce(errorInfo[NSAppleScriptErrorMessage]);
-        if (result.message.isEmpty())
-            result.message = "errore AppleScript " + juce::String([errorInfo[NSAppleScriptErrorNumber] intValue]);
-        return result;
+        NSAppleEventDescriptor* descriptor = script != nil ? [script executeAndReturnError:&errorInfo] : nil;
+        return interpret(script != nil, descriptor != nil, errorInfo != nil,
+                         [errorInfo[NSAppleScriptErrorNumber] intValue], toJuce(errorInfo[NSAppleScriptErrorMessage]));
     }
 }
 
