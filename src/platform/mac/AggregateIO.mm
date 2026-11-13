@@ -81,6 +81,18 @@ juce::String fourCharCode(UInt32 code)
     return util::statusString(static_cast<OSStatus>(code));
 }
 
+// Italian text with non-ASCII characters (juce::String(const char*) expects ASCII).
+juce::String it(const char* utf8)
+{
+    return juce::String::fromUTF8(utf8);
+}
+
+// «name», as the panel quotes names.
+juce::String quoted(const juce::String& name)
+{
+    return it("\u00ab") + name + it("\u00bb");
+}
+
 } // namespace
 
 struct AggregateIO::Impl {
@@ -253,46 +265,52 @@ AggregateIO::AggregateIO() : impl_(std::make_unique<Impl>())
 
 AggregateIO::~AggregateIO() = default;
 
+std::unique_ptr<AggregateIO> AggregateIO::createDetached()
+{
+    return std::unique_ptr<AggregateIO>(new AggregateIO());
+}
+
 std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback callback, juce::String& error)
 {
     @autoreleasepool {
         if (params.micUid.startsWith("fixomic_")) {
-            error = "the microphone cannot be a fixomic device (" + params.micUid + ")";
+            error = it("Il microfono non pu\u00f2 essere un dispositivo fixomic (") + params.micUid + ")";
             return nullptr;
         }
         const auto mic = findDeviceByUid(params.micUid);
         if (!mic) {
-            error = "microphone " + params.micUid + " not found";
+            error = "Microfono non trovato (" + params.micUid + ")";
             return nullptr;
         }
         const auto bridge = findDeviceByUid(devices::kBridgeUid);
         if (!bridge) {
-            error = juce::String(devices::kBridgeName) + " not found: is the fixomic driver installed?";
+            error = it("fixomic Bridge non trovato: il driver fixomic \u00e8 installato? (") + devices::kBridgeUid + ")";
             return nullptr;
         }
         const juce::String micName = util::getString(*mic, kAudioObjectPropertyName);
         const int micChannels = util::channelCount(*mic, kAudioObjectPropertyScopeInput);
         if (micChannels <= 0) {
-            error = "microphone '" + micName + "' has no input channels";
+            error = "Il microfono " + quoted(micName) + " non ha canali di ingresso";
             return nullptr;
         }
         if (params.micChannel < 0 || params.micChannel >= micChannels) {
-            error = "microphone '" + micName + "' has " + juce::String(micChannels) + " input channels, channel "
-                    + juce::String(params.micChannel + 1) + " requested";
+            error = "Il microfono " + quoted(micName) + " ha " + juce::String(micChannels)
+                    + " canali di ingresso: il canale " + juce::String(params.micChannel + 1) + " non esiste";
             return nullptr;
         }
 
         // The mic is the clock master, so it has to run at the driver's only rate.
         const auto rates = util::nominalRates(*mic);
         if (std::none_of(rates.begin(), rates.end(), [](double r) { return std::abs(r - kRate) < 0.5; })) {
-            error = "microphone '" + micName + "' does not support 48 kHz";
+            error = "Il microfono " + quoted(micName) + " non supporta 48 kHz";
             return nullptr;
         }
         if (std::abs(util::getScalar<Float64>(*mic, kAudioDevicePropertyNominalSampleRate).value_or(0.0) - kRate)
             >= 0.5) {
             const OSStatus status = util::setScalar<Float64>(*mic, kAudioDevicePropertyNominalSampleRate, kRate);
             if (status != noErr || !waitForRate(*mic, kRate)) {
-                error = "could not switch microphone '" + micName + "' to 48 kHz: " + util::statusString(status);
+                error = "Impossibile portare il microfono " + quoted(micName) + " a 48 kHz (" + util::statusString(status)
+                        + ")";
                 return nullptr;
             }
         }
@@ -332,7 +350,8 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
             AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)description, &s.aggregate);
         if (created != noErr || s.aggregate == kAudioObjectUnknown) {
             s.aggregate = kAudioObjectUnknown;
-            error = "AudioHardwareCreateAggregateDevice failed: " + util::statusString(created);
+            error = "Impossibile creare il dispositivo aggregato (AudioHardwareCreateAggregateDevice: "
+                    + util::statusString(created) + ")";
             return nullptr;
         }
         // From here on `io` owns the aggregate: every early return destroys it.
@@ -341,7 +360,7 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
             >= 0.5) {
             const OSStatus status = util::setScalar<Float64>(s.aggregate, kAudioDevicePropertyNominalSampleRate, kRate);
             if (status != noErr || !waitForRate(s.aggregate, kRate)) {
-                error = "could not set the aggregate device to 48 kHz: " + util::statusString(status);
+                error = "Impossibile portare il dispositivo aggregato a 48 kHz (" + util::statusString(status) + ")";
                 return nullptr;
             }
         }
@@ -353,8 +372,8 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
         const OSStatus bufferStatus =
             util::setScalar<UInt32>(s.aggregate, kAudioDevicePropertyBufferFrameSize, static_cast<UInt32>(requested));
         if (bufferStatus != noErr) {
-            error = "could not set the IO buffer to " + juce::String(requested) + " frames: "
-                    + util::statusString(bufferStatus);
+            error = "Impossibile impostare il buffer a " + juce::String(requested) + " campioni ("
+                    + util::statusString(bufferStatus) + ")";
             return nullptr;
         }
         s.bufferFrames = static_cast<int>(
@@ -404,7 +423,7 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
         const auto inShapes = aggregateShapes(aggregateIn, inFormatOk);
         const auto outShapes = aggregateShapes(aggregateOut, outFormatOk);
         if (!inFormatOk || !outFormatOk) {
-            error = "the aggregate device's streams are not interleaved 32-bit float";
+            error = "Formato audio del dispositivo aggregato non supportato (serve float a 32 bit interleaved)";
             return nullptr;
         }
 
@@ -446,13 +465,14 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
                 inputLayout = tapsThenSubs;
                 layoutName = "taps then sub-devices";
             } else {
-                error = "unexpected aggregate input layout " + describeShapes(inShapes);
+                error = "Disposizione inattesa degli ingressi del dispositivo aggregato (" + describeShapes(inShapes)
+                        + ")";
                 return nullptr;
             }
         }
         std::vector<int> outputFirst;
         if (!match(outputBlocks, outShapes, outputFirst)) {
-            error = "unexpected aggregate output layout " + describeShapes(outShapes);
+            error = "Disposizione inattesa delle uscite del dispositivo aggregato (" + describeShapes(outShapes) + ")";
             return nullptr;
         }
 
@@ -494,10 +514,10 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
                           + (block.kind == Block::Kind::Bridge ? "" : " (zeroed)"));
         }
         if (!s.micSlot.valid() || !s.outLSlot.valid() || (params.tap != nullptr && !s.refSlot.valid())) {
-            error = "the aggregate device is missing the " + juce::String(!s.micSlot.valid() ? "microphone"
-                                                                          : !s.outLSlot.valid() ? "Bridge"
-                                                                                                : "tap")
-                    + " streams";
+            error = juce::String("Nel dispositivo aggregato mancano i flussi ")
+                    + (!s.micSlot.valid()    ? "del microfono"
+                       : !s.outLSlot.valid() ? "di fixomic Bridge"
+                                             : "dell'audio di sistema");
             return nullptr;
         }
         s.micStream = aggregateIn[static_cast<size_t>(s.micSlot.buffer)];
@@ -522,7 +542,7 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
         const OSStatus procStatus = AudioDeviceCreateIOProcID(s.aggregate, &Impl::ioProc, &s, &s.procId);
         if (procStatus != noErr || s.procId == nullptr) {
             s.procId = nullptr;
-            error = "AudioDeviceCreateIOProcID failed: " + util::statusString(procStatus);
+            error = "Impossibile avviare l'audio (AudioDeviceCreateIOProcID: " + util::statusString(procStatus) + ")";
             return nullptr;
         }
 
@@ -558,8 +578,7 @@ std::unique_ptr<AggregateIO> AggregateIO::create(const Params& params, Callback 
                  }))
             failed = "device list";
         if (failed != nullptr) {
-            error = juce::String("could not register the ") + failed
-                    + " listener (did the device disappear during setup?)";
+            error = it("Un dispositivo audio \u00e8 scomparso durante la configurazione (listener ") + failed + ")";
             return nullptr;
         }
         watch(s.aggregate, kAudioDeviceProcessorOverload, [impl] { ++impl->overloads; });
@@ -573,13 +592,14 @@ bool AggregateIO::start()
     if (s.running)
         return true;
     if (s.lostPending || s.lostFired) {
-        s.lastError = "the device was lost or reconfigured after create(): build a new AggregateIO";
+        s.lastError = "Dispositivo audio perso o riconfigurato prima dell'avvio (AggregateIO da ricreare)";
         return false;
     }
     s.expectedSampleTime = -1.0;
     const OSStatus status = AudioDeviceStart(s.aggregate, s.procId);
     if (status != noErr) {
-        s.lastError = "AudioDeviceStart failed: " + util::statusString(status);
+        s.lastError = "Impossibile avviare il dispositivo aggregato (AudioDeviceStart: " + util::statusString(status)
+                      + ")";
         return false;
     }
     s.running = true;

@@ -60,7 +60,8 @@ void EngineController::onDeviceLost() {
     close();
     // Lost again right after opening: do not rebuild in a tight loop, let tick() retry later.
     if (wasOpen && demand_ && now - lastOpened_ < kLostAfterOpenSeconds && blockedState() == EngineState::Idle) {
-        lastError_ = "the audio device was lost again right after starting; retrying";
+        lastError_ = juce::String::fromUTF8(
+            "Il dispositivo audio si \u00e8 perso di nuovo subito dopo l'avvio: nuovo tentativo tra poco");
         lastAttempt_ = now;
         setState(EngineState::Error);
         return;
@@ -86,6 +87,9 @@ void EngineController::tick() {
         evaluate();
     } else if (state_ == EngineState::Error && (!demand_ || now - lastAttempt_ >= kRetrySeconds)) {
         evaluate();   // without demand: Idle
+    } else if (demand_ && (state_ == EngineState::MicMissing || state_ == EngineState::DriverMissing)
+               && now - lastBlockedCheck_ >= kBlockedRecheckSeconds) {
+        evaluate();   // a device list notification may have been missed: check the devices again
     }
 }
 
@@ -104,6 +108,7 @@ EngineState EngineController::blockedState() {
 void EngineController::evaluate() {
     const EngineState blocked = blockedState();
     if (blocked != EngineState::Idle) {
+        lastBlockedCheck_ = now_();
         close();
         lastError_.clear();
         setState(blocked);
@@ -134,7 +139,7 @@ void EngineController::open() {
         lastError_.clear();
         setState(EngineState::Running);
     } else {
-        lastError_ = error.isNotEmpty() ? error : juce::String("could not open the audio IO");
+        lastError_ = error.isNotEmpty() ? error : juce::String("Impossibile avviare l'audio");
         // Nobody needs the IO (e.g. a rebuild during the grace period): nothing to retry.
         setState(demand_ ? EngineState::Error : EngineState::Idle);
     }

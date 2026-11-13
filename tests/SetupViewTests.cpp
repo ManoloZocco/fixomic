@@ -543,7 +543,8 @@ TEST_CASE("Onboarding: a denied or silent tap reported later reopens the system 
     f.warning = WarningKind::SystemAudioSilent;
     g.set(f, "scarlett");
     REQUIRE(g.guide.currentStep() == 1);
-    REQUIRE(g.guide.bodyText().contains("probabilmente negato"));
+    REQUIRE(g.guide.bodyText().contains("solo silenzio"));
+    REQUIRE_FALSE(g.guide.bodyText().containsIgnoreCase("negato"));   // maybe just a quiet call
     REQUIRE(g.primary() == "Apri Impostazioni di Sistema");
     g.guide.primaryButton().onClick();
     REQUIRE(g.panes == std::vector<PrivacyPane>{PrivacyPane::SystemAudio});

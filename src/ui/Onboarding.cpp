@@ -154,7 +154,7 @@ void Onboarding::update() {
                 }
             } else if (step.status == StepStatus::Blocked) {
                 detail = step.step == SetupStep::SystemAudio && data_.facts.warning == mac::WarningKind::SystemAudioSilent
-                             ? "Probabilmente negato"
+                             ? "Da controllare"   // only silence: maybe denied, maybe a quiet call
                              : "Accesso negato";
             }
         }
@@ -195,8 +195,8 @@ void Onboarding::update() {
             break;
         case StepAction::OpenSettings:
             body = data_.facts.warning == mac::WarningKind::SystemAudioSilent
-                       ? utf8("fixomic riceve solo silenzio dall’audio di sistema: il permesso è "
-                              "probabilmente negato e l’eco resta. Abilita fixomic in ")
+                       ? utf8("fixomic riceve solo silenzio dall’audio di sistema mentre il Mac riproduce "
+                              "audio. Se l’eco resta, controlla che fixomic sia abilitato in ")
                              + utf8(kSystemAudioSettings) + "."
                        : utf8("Permesso negato: senza, la cancellazione dell’eco non funziona. Abilita fixomic "
                               "in ")

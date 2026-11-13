@@ -3,6 +3,7 @@
 #include "core/Config.h"
 #include "core/LatencyBudget.h"
 #include "engine/EngineController.h"
+#include "platform/mac/AggregateIO.h"
 #include "platform/mac/Permissions.h"
 
 #include <juce_core/juce_core.h>
@@ -21,7 +22,6 @@ class ProcessingGraph;
 
 namespace fixomic::mac {
 
-class AggregateIO;
 class SystemAudioTap;
 
 // Where MacEngineBackend::openIO() gets the microphone authorization (injectable for tests).
@@ -46,9 +46,20 @@ struct SystemAudioAccess {
 // successful open (plugins keep their state and are never unloaded: closeIO() leaves the chain
 // alone); otherwise the AEC is just reset (fresh echo estimate). The graph is prepared, the AEC /
 // bypass flags applied, then openIO() creates the tap
-// when asked (if that fails the IO opens without it, AEC inactive, and onWarning says why),
-// creates the aggregate, arms the graph's startup mute (kStartupMuteSamples + kStartupFadeSamples)
-// and starts it.
+// when asked (if that fails the IO opens without it, AEC inactive, and onWarning says why), arms
+// the graph's startup mute (kStartupMuteSamples + kStartupFadeSamples), and creates and starts the
+// aggregate through the IoOpener (openAggregate() unless a test injects another). If that fails
+// while the tap is in it, the tap is dropped and the aggregate tried once more without it: the IO
+// then runs mic-only (AEC inactive: residual echo is better than a silent fixomic Mic) and onWarning
+// says why (SystemAudioUnavailable). If the tapless attempt fails too, openIO() fails with its error.
+//
+// Warnings (warning() / warningKind()) are about the open attempt that raised them: every openIO()
+// starts by clearing the current one (onWarningCleared), so a retry that opens without raising one
+// leaves none, while one raised on the way (or later by the silence watch of that IO) stays until the
+// next attempt. closeIO() keeps it.
+//
+// Every error and warning text is Italian (shown in the panel); technical details (OSStatus, API
+// names, UIDs) come last, in parentheses.
 //
 // Permissions, checked before any HAL call (the TCC prompts block the thread that triggers them,
 // see docs/notes/permissions.md):
@@ -64,7 +75,9 @@ struct SystemAudioAccess {
 //     enable it.
 //   Unless the permission is known to be granted, a tap that delivers only digital silence for
 //     TapSilenceWatch::kSilentSeconds while the default output device is running raises onWarning
-//     ("probably denied"), once per open.
+//     (SystemAudioSilent), once per open. It can be a denied permission or just a quiet output (a
+//     call where nobody speaks; the preflight stays stale after a prompt answered in this process),
+//     so the text says what fixomic sees and where to check, never that the permission is denied.
 //   requestMicrophone() / requestSystemAudio() (the first-run guide) share this state with openIO():
 //     a prompt raised by either is the one the other waits for, never a second one.
 //
@@ -73,9 +86,17 @@ struct SystemAudioAccess {
 class MacEngineBackend : public EngineBackend {
 public:
     using MicrophoneAccess = mac::MicrophoneAccess;
+    // openIO()'s Core Audio step, injectable for tests: creates the aggregate for `params` and starts
+    // it. Returns the running IO, or nullptr with `error` filled and nothing left open.
+    using IoOpener = std::function<std::unique_ptr<AggregateIO>(const AggregateIO::Params&, AggregateIO::Callback,
+                                                                juce::String& error)>;
+    // The real one: AggregateIO::create(), then start().
+    static std::unique_ptr<AggregateIO> openAggregate(const AggregateIO::Params&, AggregateIO::Callback,
+                                                      juce::String& error);
 
     MacEngineBackend(ProcessingGraph& graph, AecStage& aec, PluginChain& chain,
-                     std::function<Config()> configProvider, MicrophoneAccess = {}, SystemAudioAccess = {});
+                     std::function<Config()> configProvider, MicrophoneAccess = {}, SystemAudioAccess = {},
+                     IoOpener = openAggregate);
     ~MacEngineBackend() override;   // closes the IO
     MacEngineBackend(const MacEngineBackend&) = delete;
     MacEngineBackend& operator=(const MacEngineBackend&) = delete;
@@ -123,10 +144,14 @@ public:
     // re-evaluate the engine, deferred.
     std::function<void()> onSystemAudioPermission;
 
-    // The tap could not be created, the system audio permission is denied, or the tap stays silent
-    // (permission probably denied): the IO runs without (working) echo cancellation. The kind says
-    // which, the text says it in Italian. Main thread.
+    // The tap (or the aggregate with it) could not be created, the system audio permission is
+    // denied, or the tap stays silent: the IO runs without (working) echo cancellation. The kind says
+    // which, the text says it in Italian; it becomes the current warning. Main thread.
     std::function<void(WarningKind, juce::String)> onWarning;
+    // The current warning was cleared (a new openIO() attempt started). Main thread.
+    std::function<void()> onWarningCleared;
+    juce::String warning() const;                       // the current warning's text, "" if none
+    std::optional<WarningKind> warningKind() const;     // nullopt without one
     // The aggregate reported a lost / reconfigured device (forward to EngineController::onDeviceLost,
     // which may call closeIO() from inside the handler). Main thread.
     std::function<void()> onDeviceLost;
@@ -148,7 +173,8 @@ private:
     bool checkSystemAudio(bool& withTap, juce::String& error);
     void askMicrophone();     // raises the microphone prompt, unless it was raised already
     void askSystemAudio();    // raises the System Audio Recording prompt (not while one is up)
-    void warn(WarningKind, const juce::String&);
+    void warn(WarningKind, const juce::String&);   // sets the current warning, then onWarning
+    void clearWarning();                           // clears it (onWarningCleared if there was one)
     void startSilenceWatch();
     void stopSilenceWatch();
 
@@ -158,6 +184,9 @@ private:
     std::function<Config()> configProvider_;
     MicrophoneAccess micAccess_;
     SystemAudioAccess audioAccess_;
+    IoOpener openAggregate_;
+    juce::String warning_;
+    std::optional<WarningKind> warningKind_;
     Request micRequest_ = Request::None;     // the microphone prompt: raised at most once per backend
     std::vector<std::function<void(bool)>> micWaiters_;     // requestMicrophone() callers
     Request audioRequest_ = Request::None;   // the system audio prompt, until it was raised once

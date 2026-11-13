@@ -35,7 +35,8 @@ std::unique_ptr<SystemAudioTap> SystemAudioTap::create(juce::String& error)
     @autoreleasepool {
         const AudioObjectID self = ownProcessObject();
         if (self == kAudioObjectUnknown) {
-            error = "system audio tap: cannot translate fixomic's pid to a Core Audio process object";
+            error = "Impossibile trovare il processo di fixomic in Core Audio "
+                    "(kAudioHardwarePropertyTranslatePIDToProcessObject)";
             return nullptr;
         }
         CATapDescription* description = [[CATapDescription alloc] initMonoGlobalTapButExcludeProcesses:@[ @(self) ]];
@@ -46,7 +47,8 @@ std::unique_ptr<SystemAudioTap> SystemAudioTap::create(juce::String& error)
         AudioObjectID tap = kAudioObjectUnknown;
         const OSStatus status = AudioHardwareCreateProcessTap(description, &tap);
         if (status != noErr || tap == kAudioObjectUnknown) {
-            error = "system audio tap: AudioHardwareCreateProcessTap failed: " + util::statusString(status);
+            error = "Impossibile creare il tap dell'audio di sistema (AudioHardwareCreateProcessTap: "
+                    + util::statusString(status) + ")";
             return nullptr;
         }
         juce::String uid = util::getString(tap, kAudioTapPropertyUID);

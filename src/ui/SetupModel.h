@@ -83,7 +83,7 @@ bool canUninstallDriver(const DriverFacts&);
 
 juce::String microphonePermissionText(mac::Permission);   // "Consentito", "Negato", "Non ancora chiesto"
 // NotDetermined is "unknown" (the preflight is stale in this process, or not available), never
-// "denied": "Non noto", or "Probabilmente negato" while the tap is reported silent.
+// "denied": "Non noto", or "Da controllare" while the tap is reported silent (not a denial either).
 juce::String systemAudioPermissionText(mac::Permission, std::optional<mac::WarningKind>);
 
 // ---- first-run guide -----------------------------------------------------------------------------

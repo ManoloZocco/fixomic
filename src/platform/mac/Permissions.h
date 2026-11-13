@@ -40,7 +40,8 @@ void requestSystemAudio(std::function<void(bool ok, juce::String error)> complet
 // system audio reference.
 enum class WarningKind {
     SystemAudioDenied,        // the permission is denied: the IO opened without the tap
-    SystemAudioSilent,        // the tap delivers only silence while the Mac plays audio: probably denied
+    SystemAudioSilent,        // the tap delivers only silence while the Mac plays audio: maybe denied,
+                              // maybe a quiet output (indistinguishable here; never shown as a denial)
     SystemAudioUnavailable,   // the tap, or the prompt's throwaway IO, could not be created (the prompt
                               // may not have been shown)
 };

@@ -168,8 +168,9 @@ TEST_CASE("permission texts: system audio NotDetermined is unknown, never denied
     REQUIRE(systemAudioPermissionText(Permission::Granted, std::nullopt) == "Consentito");
     REQUIRE(systemAudioPermissionText(Permission::Denied, std::nullopt) == "Negato");
     REQUIRE(systemAudioPermissionText(Permission::NotDetermined, std::nullopt) == "Non noto");
+    // Only silence from the tap: maybe denied, maybe a quiet call. Never stated as a denial.
     REQUIRE(systemAudioPermissionText(Permission::NotDetermined, WarningKind::SystemAudioSilent)
-            == "Probabilmente negato");
+            == "Da controllare");
     REQUIRE(systemAudioPermissionText(Permission::NotDetermined, WarningKind::SystemAudioUnavailable) == "Non noto");
 }
 

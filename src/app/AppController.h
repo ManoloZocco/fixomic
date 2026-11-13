@@ -83,7 +83,9 @@ public:
     // The permission prompt the last open attempt is waiting for: with it, Error means "waiting for
     // the user", not a failure. None after a successful open or any other failure.
     PendingPermission pendingPermission() const;
-    juce::String lastWarning() const;    // last backend warning (e.g. no system audio tap), "" if none
+    // The backend's current warning (e.g. no system audio tap), "" if none. About the last open
+    // attempt: a new attempt starts without one (MacEngineBackend::warning()).
+    juce::String lastWarning() const;
     std::optional<mac::WarningKind> lastWarningKind() const;   // what it is about; nullopt without one
     // The System Settings pane that fixes lastWarning(): the system audio pane for a denied or silent
     // tap (ui::warningPane); nullopt for a tap that could not be created (opening a pane cannot fix
@@ -201,8 +203,6 @@ private:
     bool aecActive_ = false;                // as last notified (see timerCallback)
 
     std::vector<juce::String> startupWarnings_;
-    juce::String lastWarning_;
-    std::optional<mac::WarningKind> lastWarningKind_;
     juce::String lastSaveError_;
     double firstUnsavedChange_ = -1.0;   // ms; -1 = nothing to save
     double lastChange_ = 0.0;

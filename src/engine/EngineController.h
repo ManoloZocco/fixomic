@@ -43,6 +43,9 @@ struct EngineBackend {
 // outputs silence without a writer) and the controller never falls back to another microphone.
 // A failed openIO() -> Error (lastError()), retried every kRetrySeconds from tick() while there is
 // demand, and on every event; without demand a failure ends in Idle (lastError() keeps the reason).
+// MicMissing and DriverMissing end with the device list notification (onMicListChanged); in case
+// one is missed, tick() also checks the devices again every kBlockedRecheckSeconds while there is
+// demand (an app is waiting for fixomic Mic). lastError() is Italian (it is shown in the panel).
 // A device lost within kLostAfterOpenSeconds of a successful open is not reopened at once (that
 // could loop): Error, retried by tick() like a failed open. A Core Audio restart always closes the
 // IO (it is dead, whatever the state says) and re-evaluates.
@@ -76,7 +79,7 @@ public:
     // IO died with it. Closed and the devices re-checked; reopened on demand. Unlike onDeviceLost()
     // never throttled: the restart is a one-off event, not something the open caused.
     void onServiceRestarted();
-    void tick();                     // every ~200 ms: grace period and Error retries
+    void tick();                     // every ~200 ms: grace period, Error retries, blocked re-checks
 
     EngineState state() const;
     juce::String lastError() const;
@@ -87,6 +90,7 @@ public:
     static constexpr double kStopGraceSeconds = 3.0;   // plan decision
     static constexpr double kRetrySeconds = 2.0;
     static constexpr double kLostAfterOpenSeconds = 1.0;
+    static constexpr double kBlockedRecheckSeconds = 3.0;
 
 private:
     static bool wantsTap(const Config&);
@@ -105,6 +109,7 @@ private:
     bool ioWithTap_ = false;
     double lastAttempt_ = 0.0;
     double lastOpened_ = 0.0;
+    double lastBlockedCheck_ = 0.0;   // when evaluate() last found the devices blocked
     EngineState state_ = EngineState::Idle;
     juce::String lastError_;
 };

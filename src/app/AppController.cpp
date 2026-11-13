@@ -58,13 +58,9 @@ AppController::AppController(Options options)
     chain_.onChanged = [this] { post([](AppController& c) { c.changed(); }); };
     chain_.onPluginStateChanged = [this] { post([](AppController& c) { c.scheduleSave(); }); };
     windows_.onClosed = [this](juce::AudioPluginInstance&) { scheduleSave(); };
-    backend_.onWarning = [this](mac::WarningKind kind, juce::String warning) {
-        post([kind, warning](AppController& c) {
-            c.lastWarning_ = warning;
-            c.lastWarningKind_ = kind;
-            c.notify();
-        });
-    };
+    // The backend holds the current warning (each open attempt starts without one): notify only.
+    backend_.onWarning = [this](mac::WarningKind, juce::String) { post([](AppController& c) { c.notify(); }); };
+    backend_.onWarningCleared = [this] { post([](AppController& c) { c.notify(); }); };
     backend_.onDeviceLost = [this] { post([](AppController& c) { c.engine_.onDeviceLost(); }); };
     // Answer to the microphone prompt raised by openIO(): re-evaluate (opens on demand if granted,
     // reports the denial otherwise).
@@ -81,15 +77,7 @@ AppController::AppController(Options options)
             c.notify();
         });
     };
-    engine_.onStateChanged = [this](EngineState state) {
-        post([state](AppController& c) {
-            if (state == EngineState::Starting) {   // a fresh open reports anew
-                c.lastWarning_.clear();
-                c.lastWarningKind_.reset();
-            }
-            c.notify();
-        });
-    };
+    engine_.onStateChanged = [this](EngineState) { post([](AppController& c) { c.notify(); }); };
 
     if (config_.launchAtLogin && !mac::launchAtLoginEnabled() && !mac::launchAtLoginRequiresApproval()) {
         juce::String error;
@@ -175,13 +163,14 @@ void AppController::notify() {
 EngineState AppController::engineState() const { return engine_.state(); }
 juce::String AppController::lastError() const { return engine_.lastError(); }
 PendingPermission AppController::pendingPermission() const { return backend_.pendingPermission(); }
-juce::String AppController::lastWarning() const { return lastWarning_; }
+juce::String AppController::lastWarning() const { return backend_.warning(); }
 
-std::optional<mac::WarningKind> AppController::lastWarningKind() const { return lastWarningKind_; }
+std::optional<mac::WarningKind> AppController::lastWarningKind() const { return backend_.warningKind(); }
 
 std::optional<mac::PrivacyPane> AppController::lastWarningPane() const {
-    if (!lastWarningKind_) return std::nullopt;
-    return ui::warningPane(*lastWarningKind_);
+    const auto kind = backend_.warningKind();
+    if (!kind) return std::nullopt;
+    return ui::warningPane(*kind);
 }
 
 // ---- config -----------------------------------------------------------------------------------

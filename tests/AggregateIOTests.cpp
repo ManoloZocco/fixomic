@@ -58,7 +58,29 @@ TEST_CASE("AggregateIO refuses a fixomic device as microphone", "[aggregate]")
     juce::String error;
     const auto io = AggregateIO::create({fixomic::devices::kMicUid, 0, nullptr, 128}, {}, error);
     REQUIRE(io == nullptr);
-    REQUIRE(error.contains("fixomic"));
+    // Italian, like every error that reaches the panel; the technical detail last, in parentheses.
+    REQUIRE(error == juce::String::fromUTF8("Il microfono non pu\u00f2 essere un dispositivo fixomic (")
+                         + fixomic::devices::kMicUid + ")");
+}
+
+TEST_CASE("AggregateIO reports an unknown microphone in Italian, before any HAL device is opened", "[aggregate]")
+{
+    juce::String error;
+    REQUIRE(AggregateIO::create({"no-such-mic-uid", 0, nullptr, 128}, {}, error) == nullptr);
+    REQUIRE(error == "Microfono non trovato (no-such-mic-uid)");
+}
+
+TEST_CASE("A device-less AggregateIO owns nothing and never runs", "[aggregate]")
+{
+    auto io = AggregateIO::createDetached();
+    REQUIRE(io != nullptr);
+    REQUIRE(io->deviceId() == kAudioObjectUnknown);
+    REQUIRE(io->stats().callbacks == 0);
+    REQUIRE(io->bufferFrames() == 0);
+    REQUIRE_FALSE(io->start());
+    REQUIRE(io->lastError().isNotEmpty());
+    io->stop();
+    io.reset();   // destroys nothing in the HAL
 }
 
 TEST_CASE("AggregateIO fails cleanly for an unknown microphone", "[aggregate][hardware]")
@@ -66,7 +88,7 @@ TEST_CASE("AggregateIO fails cleanly for an unknown microphone", "[aggregate][ha
     juce::String error;
     const auto io = AggregateIO::create({"no-such-mic-uid", 0, nullptr, 128}, {}, error);
     REQUIRE(io == nullptr);
-    REQUIRE(error.contains("not found"));
+    REQUIRE(error.contains("non trovato"));
 }
 
 TEST_CASE("AggregateIO rejects a channel the microphone does not have", "[aggregate][hardware]")
@@ -75,7 +97,7 @@ TEST_CASE("AggregateIO rejects a channel the microphone does not have", "[aggreg
     REQUIRE(mic.isNotEmpty());
     juce::String error;
     REQUIRE(AggregateIO::create({mic, 64, nullptr, 128}, {}, error) == nullptr);
-    REQUIRE(error.contains("channel"));
+    REQUIRE(error.contains("canale 65"));
 }
 
 TEST_CASE("SystemAudioTap is a mono tap with a UID", "[tap][hardware]")
@@ -188,7 +210,7 @@ TEST_CASE("AggregateIO keeps a device-lost event that arrives before a handler i
 
     // The stale aggregate refuses to start...
     REQUIRE_FALSE(io->start());
-    REQUIRE(io->lastError().contains("lost"));
+    REQUIRE(io->lastError().contains("perso"));
 
     // ...and a handler assigned later still hears about the next event.
     int lost = 0;

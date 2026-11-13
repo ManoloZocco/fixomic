@@ -17,6 +17,7 @@ struct FakeBackend : EngineBackend {
     bool mic = true;
     bool mic48k = true;
     bool openFails = false;
+    juce::String openError = "aggregate exploded";   // what a failing openIO reports
     juce::String micAsked;            // last uid passed to micAvailable / micSupports48k
     int opens = 0, closes = 0;
     std::vector<bool> openTaps;       // withTap of every openIO call
@@ -38,7 +39,7 @@ struct FakeBackend : EngineBackend {
         ++opens;
         openTaps.push_back(withTap);
         if (openFails) {
-            error = "aggregate exploded";
+            error = openError;
             return false;
         }
         open = true;
@@ -367,7 +368,8 @@ TEST_CASE("EngineController throttles a device lost right after opening", "[engi
     REQUIRE(rig.backend.closes == 1);
     REQUIRE(rig.backend.opens == 1);    // no immediate reopen
     REQUIRE(rig.engine.state() == EngineState::Error);
-    REQUIRE(rig.engine.lastError().contains("lost"));
+    REQUIRE(rig.engine.lastError() == juce::String::fromUTF8(
+                "Il dispositivo audio si \u00e8 perso di nuovo subito dopo l'avvio: nuovo tentativo tra poco"));
 
     rig.runUntil(0.5 + EngineController::kRetrySeconds - 0.1);
     REQUIRE(rig.backend.opens == 1);
@@ -500,4 +502,69 @@ TEST_CASE("EngineController destructor closes an open IO", "[engine]") {
     }
     REQUIRE_FALSE(backend.open);
     REQUIRE(backend.closes == 1);
+}
+
+TEST_CASE("EngineController reports an open failure without a reason in Italian", "[engine]") {
+    Rig rig;
+    rig.backend.openFails = true;
+    rig.backend.openError = {};
+    rig.engine.onDemandChanged(true);
+    REQUIRE(rig.engine.state() == EngineState::Error);
+    REQUIRE(rig.engine.lastError() == "Impossibile avviare l'audio");
+}
+
+// The device list notification is the only event that ends MicMissing / DriverMissing; should one be
+// missed (seen after a Core Audio restart), tick() checks again every kBlockedRecheckSeconds while an
+// app waits for fixomic Mic.
+TEST_CASE("EngineController re-checks a missing mic or driver every few seconds while in demand", "[engine]") {
+    REQUIRE(EngineController::kBlockedRecheckSeconds >= 2.0);
+    REQUIRE(EngineController::kBlockedRecheckSeconds <= 5.0);
+    const double recheck = EngineController::kBlockedRecheckSeconds;
+
+    SECTION("the microphone comes back without a notification") {
+        Rig rig;
+        rig.backend.mic = false;
+        rig.engine.onDemandChanged(true);
+        REQUIRE(rig.engine.state() == EngineState::MicMissing);
+        rig.runUntil(1.0);
+        rig.backend.mic = true;   // plugged in; the HAL notification never arrives
+        rig.runUntil(recheck - 0.3);
+        REQUIRE(rig.engine.state() == EngineState::MicMissing);
+        REQUIRE(rig.backend.opens == 0);
+        rig.runUntil(recheck + 0.3);
+        REQUIRE(rig.engine.state() == EngineState::Running);
+        REQUIRE(rig.backend.opens == 1);
+    }
+    SECTION("the driver comes back without a notification") {
+        Rig rig;
+        rig.backend.driver = false;
+        rig.engine.onDemandChanged(true);
+        REQUIRE(rig.engine.state() == EngineState::DriverMissing);
+        rig.backend.driver = true;
+        rig.runUntil(recheck + 0.3);
+        REQUIRE(rig.engine.state() == EngineState::Running);
+        REQUIRE(rig.backend.opens == 1);
+    }
+    SECTION("checked again and again while still missing, then recovered") {
+        Rig rig;
+        rig.backend.mic = false;
+        rig.engine.onDemandChanged(true);
+        rig.runUntil(4 * recheck + 0.3);
+        REQUIRE(rig.engine.state() == EngineState::MicMissing);
+        REQUIRE(rig.changes == std::vector<EngineState>{EngineState::MicMissing});   // no flicker
+        rig.backend.mic = true;
+        rig.runUntil(5 * recheck + 0.3);
+        REQUIRE(rig.engine.state() == EngineState::Running);
+    }
+    SECTION("without demand nothing is polled: the notification still updates the state") {
+        Rig rig;
+        rig.backend.mic = false;
+        rig.engine.onMicListChanged();
+        REQUIRE(rig.engine.state() == EngineState::MicMissing);
+        rig.backend.mic = true;
+        rig.runUntil(4 * recheck);
+        REQUIRE(rig.engine.state() == EngineState::MicMissing);
+        rig.engine.onMicListChanged();
+        REQUIRE(rig.engine.state() == EngineState::Idle);
+    }
 }

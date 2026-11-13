@@ -61,7 +61,7 @@ juce::String raiseSystemAudioPrompt()
     @autoreleasepool {
         NSString* tapUid = [NSString stringWithUTF8String:tap->uid().toRawUTF8()];
         if (tapUid == nil)
-            return "system audio tap: invalid UID";
+            return "UID del tap dell'audio di sistema non valido (" + tap->uid() + ")";
         NSDictionary* description = @{
             @kAudioAggregateDeviceNameKey : @"fixomic permission",
             @kAudioAggregateDeviceUIDKey : [@"fixomic_permission_" stringByAppendingString:[NSUUID UUID].UUIDString],
@@ -75,7 +75,8 @@ juce::String raiseSystemAudioPrompt()
         AudioObjectID aggregate = kAudioObjectUnknown;
         const OSStatus created = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)description, &aggregate);
         if (created != noErr || aggregate == kAudioObjectUnknown)
-            return "AudioHardwareCreateAggregateDevice failed: " + util::statusString(created);
+            return "Impossibile creare il dispositivo aggregato per il permesso (AudioHardwareCreateAggregateDevice: "
+                   + util::statusString(created) + ")";
         AudioDeviceIOProcID proc = nullptr;
         // Blocks here while the prompt is up (measured: 17-22 s until answered).
         const OSStatus status = AudioDeviceCreateIOProcIDWithBlock(
@@ -87,7 +88,8 @@ juce::String raiseSystemAudioPrompt()
             AudioDeviceDestroyIOProcID(aggregate, proc);
         AudioHardwareDestroyAggregateDevice(aggregate);
         if (status != noErr || proc == nullptr)
-            return "AudioDeviceCreateIOProcID failed: " + util::statusString(status);
+            return "Impossibile avviare l'audio per il permesso (AudioDeviceCreateIOProcID: " + util::statusString(status)
+                   + ")";
         return {};
     }
 }

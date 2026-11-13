@@ -8,7 +8,9 @@ namespace fixomic::mac {
 // device is running (some app plays audio). It returns true once (per watch) when the tap stayed
 // silent for kSilentSeconds of running output (not necessarily contiguous: output that stops
 // pauses the count). A single non-zero sample proves the permission works: the watch then never
-// warns.
+// warns. A warning is not proof of a denial: a running output that plays digital silence (a call
+// where nobody speaks) looks the same, so its text never claims one (MacEngineBackend). Counting
+// only after a first non-zero sample is no way out: a denied tap never delivers one.
 class TapSilenceWatch {
 public:
     static constexpr double kSilentSeconds = 10.0;

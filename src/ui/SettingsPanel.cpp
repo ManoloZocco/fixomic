@@ -18,7 +18,7 @@ constexpr int kButtonHeight = 24;               // push buttons
 constexpr int kButtonGap = 8;
 constexpr int kRowHeight = 20;                  // a label and its value
 constexpr int kRateWidth = 70;                  // "48 kHz"
-constexpr int kPermissionWidth = 150;           // "Probabilmente negato"
+constexpr int kPermissionWidth = 150;           // "Non ancora chiesto", the longest
 
 int pushButtonWidth(const juce::TextButton& button) { return Theme::pushButtonWidth(button.getButtonText()); }
 int flatButtonWidth(const juce::TextButton& button) { return Theme::flatButtonWidth(button); }
@@ -229,8 +229,8 @@ void SettingsPanel::update() {
     juce::String note;
     if (data_.systemAudio == mac::Permission::NotDetermined)
         note = data_.warning == mac::WarningKind::SystemAudioSilent
-                   ? utf8("fixomic riceve solo silenzio dall’audio di sistema: abilitalo in Impostazioni di "
-                          "Sistema.")
+                   ? utf8("fixomic riceve solo silenzio dall’audio di sistema: se l’eco resta, controlla in "
+                          "Impostazioni di Sistema.")
                    : utf8("macOS non dice alle app se l’hai consentito: se l’eco resta, controlla in "
                           "Impostazioni di Sistema.");
     audioNote_.setText(note);

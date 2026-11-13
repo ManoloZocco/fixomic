@@ -44,15 +44,18 @@ juce::String MacEngineBackend::systemAudioDeniedWarning()
 
 juce::String MacEngineBackend::systemAudioUnavailableWarning(const juce::String& reason)
 {
-    return juce::String::fromUTF8("Audio di sistema non disponibile, la cancellazione dell'eco \u00e8 disattivata: ")
-           + reason;
+    juce::String text = juce::String::fromUTF8("Audio di sistema non disponibile: la cancellazione dell'eco \u00e8 "
+                                               "disattivata.");
+    if (reason.isNotEmpty())
+        text << " " << reason << (reason.endsWithChar('.') ? "" : ".");
+    return text;
 }
 
 juce::String MacEngineBackend::systemAudioSilentWarning()
 {
-    return juce::String::fromUTF8("Il permesso audio di sistema \u00e8 probabilmente negato: fixomic riceve solo "
-                                  "silenzio mentre il Mac riproduce audio, quindi la cancellazione dell'eco non "
-                                  "funziona. Controlla ")
+    // Not a statement about the permission: a denied tap and a quiet output look the same here.
+    return juce::String::fromUTF8("fixomic riceve solo silenzio dall'audio di sistema mentre il Mac riproduce audio. "
+                                  "Se l'eco resta, controlla che fixomic sia abilitato in ")
            + juce::String::fromUTF8(kSystemAudioSettings) + ".";
 }
 
@@ -69,10 +72,31 @@ struct MacEngineBackend::SilenceTimer {
 
 MacEngineBackend::MacEngineBackend(ProcessingGraph& graph, AecStage& aec, PluginChain& chain,
                                    std::function<Config()> configProvider, MicrophoneAccess micAccess,
-                                   SystemAudioAccess audioAccess)
+                                   SystemAudioAccess audioAccess, IoOpener openAggregate)
     : graph_(graph), aec_(aec), chain_(chain), configProvider_(std::move(configProvider)),
-      micAccess_(std::move(micAccess)), audioAccess_(std::move(audioAccess))
+      micAccess_(std::move(micAccess)), audioAccess_(std::move(audioAccess)), openAggregate_(std::move(openAggregate))
 {
+}
+
+std::unique_ptr<AggregateIO> MacEngineBackend::openAggregate(const AggregateIO::Params& params,
+                                                             AggregateIO::Callback callback, juce::String& error)
+{
+    auto io = AggregateIO::create(params, std::move(callback), error);
+    if (io && !io->start()) {
+        error = io->lastError();
+        io.reset();   // before the caller drops the tap it references
+    }
+    return io;
+}
+
+juce::String MacEngineBackend::warning() const
+{
+    return warning_;
+}
+
+std::optional<WarningKind> MacEngineBackend::warningKind() const
+{
+    return warningKind_;
 }
 
 MacEngineBackend::~MacEngineBackend()
@@ -108,6 +132,7 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
 {
     closeIO();
     pending_ = PendingPermission::None;
+    clearWarning();   // a warning is about the attempt that raised it: each attempt starts afresh
 
     // Never reach the HAL without microphone access: while the TCC prompt is up, creating the IO
     // proc blocks the calling (main) thread until the user answers.
@@ -152,27 +177,45 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
             warn(WarningKind::SystemAudioUnavailable, systemAudioUnavailableWarning(tapError));
     }
 
-    // Without a tap the aggregate hands the callback a silent reference: pass none to the graph so
-    // the AEC stays inactive (and adds no delay).
-    ProcessingGraph* graph = &graph_;
-    std::atomic<bool>* heard = &refHeard_;
-    const bool hasReference = tap_ != nullptr;
-    refHeard_ = false;
-    auto io = AggregateIO::create(
-        {config.inputDeviceUid, config.inputChannel, tap_.get(), block},
-        [graph, heard, hasReference](const float* mic, const float* ref, float* outL, float* outR, int n) {
-            if (hasReference && !heard->load(std::memory_order_relaxed)) {
-                for (int i = 0; i < n; ++i)
-                    if (ref[i] != 0.0f) {
-                        heard->store(true, std::memory_order_relaxed);
-                        break;
-                    }
-            }
-            graph->process(mic, hasReference ? ref : nullptr, outL, outR, n);
-        },
-        error);
+    // Creates and starts the aggregate with `tap` (or none). Without a tap the aggregate hands the
+    // callback a silent reference: none is passed to the graph, so the AEC stays inactive (and adds
+    // no delay).
+    auto start = [&](const SystemAudioTap* tap) {
+        ProcessingGraph* graph = &graph_;
+        std::atomic<bool>* heard = &refHeard_;
+        const bool hasReference = tap != nullptr;
+        refHeard_ = false;
+        graph_.armStartupMute(kStartupMuteSamples, kStartupFadeSamples);   // before the IO runs
+        return openAggregate_(
+            {config.inputDeviceUid, config.inputChannel, tap, block},
+            [graph, heard, hasReference](const float* mic, const float* ref, float* outL, float* outR, int n) {
+                if (hasReference && !heard->load(std::memory_order_relaxed)) {
+                    for (int i = 0; i < n; ++i)
+                        if (ref[i] != 0.0f) {
+                            heard->store(true, std::memory_order_relaxed);
+                            break;
+                        }
+                }
+                graph->process(mic, hasReference ? ref : nullptr, outL, outR, n);
+            },
+            error);
+    };
+
+    auto io = start(tap_.get());
+    if (!io && tap_) {
+        // The aggregate with the tap failed (created or started). Residual echo is better than a
+        // silent fixomic Mic: drop the tap and try once more, mic-only.
+        const juce::String tapError = error;
+        tap_.reset();   // no IO references it any more
+        error.clear();
+        io = start(nullptr);
+        if (io)
+            warn(WarningKind::SystemAudioUnavailable, systemAudioUnavailableWarning(tapError));
+    }
     if (!io) {
         tap_.reset();
+        if (error.isEmpty())
+            error = "Impossibile avviare l'audio";
         return false;
     }
     io->onDeviceLost = [this] {
@@ -180,14 +223,6 @@ bool MacEngineBackend::openIO(bool withTap, juce::String& error)
         if (handler)
             handler();
     };
-
-    graph_.armStartupMute(kStartupMuteSamples, kStartupFadeSamples);
-    if (!io->start()) {
-        error = io->lastError();
-        io.reset();
-        tap_.reset();
-        return false;
-    }
     io_ = std::move(io);
     if (tap_ && (audioAccess_.status ? audioAccess_.status() : Permission::Granted) != Permission::Granted)
         startSilenceWatch();
@@ -252,7 +287,7 @@ void MacEngineBackend::askSystemAudio()
         if (!*alive)
             return;
         audioRequest_ = ok ? Request::Done : Request::Failed;
-        audioRequestError_ = requestError.isNotEmpty() ? requestError : juce::String("unknown error");
+        audioRequestError_ = requestError.isNotEmpty() ? requestError : juce::String("Errore sconosciuto");
         const auto waiters = std::exchange(audioWaiters_, {});
         if (onSystemAudioPermission)
             onSystemAudioPermission();   // re-evaluated at once: with the tap, or without it
@@ -303,8 +338,20 @@ bool MacEngineBackend::systemAudioAnswered() const
 
 void MacEngineBackend::warn(WarningKind kind, const juce::String& text)
 {
+    warningKind_ = kind;
+    warning_ = text;
     if (onWarning)
         onWarning(kind, text);
+}
+
+void MacEngineBackend::clearWarning()
+{
+    if (!warningKind_)
+        return;
+    warningKind_.reset();
+    warning_.clear();
+    if (onWarningCleared)
+        onWarningCleared();
 }
 
 void MacEngineBackend::startSilenceWatch()

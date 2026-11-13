@@ -116,7 +116,8 @@ juce::String systemAudioPermissionText(mac::Permission permission, std::optional
     case mac::Permission::Denied: return "Negato";
     case mac::Permission::NotDetermined: break;
     }
-    return warning == mac::WarningKind::SystemAudioSilent ? "Probabilmente negato" : "Non noto";
+    // Only silence from the tap: a denial or just a quiet output, fixomic cannot tell.
+    return warning == mac::WarningKind::SystemAudioSilent ? "Da controllare" : "Non noto";
 }
 
 // ---- first-run guide --------------------------------------------------------------------------

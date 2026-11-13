@@ -42,6 +42,11 @@ public:
     // A mic without 48 kHz fails with an error containing "48 kHz".
     static std::unique_ptr<AggregateIO> create(const Params& params, Callback callback, juce::String& error);
 
+    // An AggregateIO that owns no device and never runs: start() fails, the accessors report
+    // nothing (no frames, no stats), destroying it touches nothing in the HAL. For tests of code
+    // that holds an IO (MacEngineBackend's IoOpener seam).
+    static std::unique_ptr<AggregateIO> createDetached();
+
     bool start();  // false on failure, see lastError()
     void stop();
     ~AggregateIO();  // stops and destroys the aggregate

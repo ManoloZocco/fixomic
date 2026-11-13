@@ -11,6 +11,7 @@
 #include "platform/mac/FixomicDevices.h"
 #include "platform/mac/MacEngineBackend.h"
 #include "platform/mac/WakeObserver.h"
+#include "ui/SetupModel.h"
 #include "support/TestPlugin.h"
 
 #import <AppKit/AppKit.h>
@@ -314,7 +315,7 @@ TEST_CASE("MacEngineBackend openIO failure leaves nothing open", "[backend][hard
     const int aggregatesBefore = settledAggregateCount(0);
     juce::String error;
     REQUIRE_FALSE(e.backend.openIO(true, error));
-    REQUIRE(error.contains("not found"));
+    REQUIRE(error.contains("non trovato"));
     REQUIRE_FALSE(e.backend.ioOpen());
     REQUIRE_FALSE(e.backend.tapActive());
     REQUIRE(settledAggregateCount(aggregatesBefore) == aggregatesBefore);
@@ -348,7 +349,7 @@ TEST_CASE("MacEngineBackend asks for the microphone before touching the HAL", "[
     fixomic::PluginChain chain;
     fixomic::ProcessingGraph graph{aec, chain};
     fixomic::Config config;
-    config.inputDeviceUid = "no-such-mic-uid";   // would fail with "not found" if the HAL were reached
+    config.inputDeviceUid = "no-such-mic-uid";   // would fail with "non trovato" if the HAL were reached
 
     mac::Permission status = mac::Permission::NotDetermined;
     int requests = 0;
@@ -387,7 +388,7 @@ TEST_CASE("MacEngineBackend asks for the microphone before touching the HAL", "[
 
     status = mac::Permission::Granted;   // now the HAL is reached
     REQUIRE_FALSE(backend.openIO(false, error));
-    REQUIRE(error.contains("not found"));
+    REQUIRE(error.contains("non trovato"));
 }
 
 TEST_CASE("MacEngineBackend asks for the system audio permission off the main thread", "[backend][permissions]")
@@ -396,7 +397,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
     fixomic::PluginChain chain;
     fixomic::ProcessingGraph graph{aec, chain};
     fixomic::Config config;
-    config.inputDeviceUid = "no-such-mic-uid";   // fails with "not found" once the aggregate is attempted
+    config.inputDeviceUid = "no-such-mic-uid";   // fails with "non trovato" once the aggregate is attempted
 
     mac::Permission status = mac::Permission::NotDetermined;
     int requests = 0;
@@ -431,7 +432,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
 
         // Without a tap there is nothing to ask; the open fails for another reason.
         REQUIRE_FALSE(backend.openIO(false, error));
-        REQUIRE(error.contains("not found"));
+        REQUIRE(error.contains("non trovato"));
         REQUIRE(backend.pendingPermission() == fixomic::PendingPermission::None);
 
         REQUIRE(pendingCompletion);
@@ -440,7 +441,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
 
         // Still "not determined" (the preflight is stale after the prompt): proceeds anyway.
         REQUIRE_FALSE(backend.openIO(true, error));
-        REQUIRE(error.contains("not found"));
+        REQUIRE(error.contains("non trovato"));
         REQUIRE(requests == 1);
         REQUIRE(warnings.empty());
     }
@@ -453,13 +454,13 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         // The prompt may not have been shown (e.g. Core Audio restarting): a tap IOProc created
         // now, on the main thread, could raise it there. Re-evaluated at once, without the tap.
         REQUIRE(pendingCompletion);
-        pendingCompletion(false, "AudioHardwareCreateProcessTap failed: '!obj'");
+        pendingCompletion(false, "Impossibile creare il tap dell'audio di sistema (AudioHardwareCreateProcessTap: '!obj')");
         REQUIRE(answers == 1);
         REQUIRE_FALSE(backend.openIO(true, error));
-        REQUIRE(error.contains("not found"));   // the aggregate was attempted
+        REQUIRE(error.contains("non trovato"));   // the aggregate was attempted
         REQUIRE(warnings.size() == 1);
         REQUIRE(warnings[0].startsWith("Audio di sistema non disponibile"));
-        REQUIRE(warnings[0].contains("AudioHardwareCreateProcessTap failed"));
+        REQUIRE(warnings[0].contains("(AudioHardwareCreateProcessTap: '!obj')"));
         REQUIRE(kinds == std::vector<mac::WarningKind>{mac::WarningKind::SystemAudioUnavailable});
         REQUIRE(requests == 1);
 
@@ -470,7 +471,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
         pendingCompletion(true, {});
         REQUIRE(answers == 2);
         REQUIRE_FALSE(backend.openIO(true, error));
-        REQUIRE(error.contains("not found"));
+        REQUIRE(error.contains("non trovato"));
         REQUIRE(requests == 2);
         REQUIRE(warnings.size() == 1);
     }
@@ -478,7 +479,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
     {
         status = mac::Permission::Denied;
         REQUIRE_FALSE(backend.openIO(true, error));
-        REQUIRE(error.contains("not found"));
+        REQUIRE(error.contains("non trovato"));
         REQUIRE(requests == 0);
         REQUIRE(warnings.size() == 1);
         REQUIRE(warnings[0].startsWith("Permesso audio di sistema negato"));
@@ -489,7 +490,7 @@ TEST_CASE("MacEngineBackend asks for the system audio permission off the main th
     {
         status = mac::Permission::Granted;
         REQUIRE_FALSE(backend.openIO(true, error));
-        REQUIRE(error.contains("not found"));
+        REQUIRE(error.contains("non trovato"));
         REQUIRE(requests == 0);
         REQUIRE(warnings.empty());
     }
@@ -503,7 +504,7 @@ TEST_CASE("MacEngineBackend raises the system audio prompt once for the guide an
     fixomic::PluginChain chain;
     fixomic::ProcessingGraph graph{aec, chain};
     fixomic::Config config;
-    config.inputDeviceUid = "no-such-mic-uid";   // fails with "not found" once the aggregate is attempted
+    config.inputDeviceUid = "no-such-mic-uid";   // fails with "non trovato" once the aggregate is attempted
 
     mac::Permission status = mac::Permission::NotDetermined;
     int requests = 0;
@@ -544,7 +545,7 @@ TEST_CASE("MacEngineBackend raises the system audio prompt once for the guide an
         REQUIRE(backend.systemAudioAnswered());
         REQUIRE_FALSE(backend.systemAudioRequestPending());
         REQUIRE_FALSE(backend.openIO(true, error));  // with the tap, as usual
-        REQUIRE(error.contains("not found"));
+        REQUIRE(error.contains("non trovato"));
         REQUIRE(requests == 1);
 
         backend.requestSystemAudio(guide);           // answered: at once, no prompt
@@ -656,7 +657,7 @@ TEST_CASE("MacEngineBackend prepares the AEC and the plugins for a new buffer si
     juce::String error;
 
     REQUIRE_FALSE(backend.openIO(false, error));
-    REQUIRE(error.contains("not found"));
+    REQUIRE(error.contains("non trovato"));
     const int afterFirst = TestPlugin::prepareCalls.load();
     REQUIRE(plugin->getBlockSize() == 128);
     REQUIRE_FALSE(backend.openIO(false, error));   // same size: not prepared again
@@ -667,4 +668,237 @@ TEST_CASE("MacEngineBackend prepares the AEC and the plugins for a new buffer si
     REQUIRE(TestPlugin::prepareCalls.load() == afterFirst + 1);
     REQUIRE(plugin->getBlockSize() == 256);
     REQUIRE(chain.pluginAt(0) == plugin);   // the same instance, state kept
+}
+
+// ---- final review fixes: openIO()'s aggregate step through the IoOpener seam -------------------
+
+namespace {
+
+// Stands in for openIO()'s Core Audio step: records every aggregate it is asked for and succeeds
+// with a device-less AggregateIO, unless `failure` names a reason for that attempt.
+struct FakeOpener {
+    std::vector<bool> withTap;   // one entry per attempt: was a tap in the aggregate?
+    std::function<juce::String(bool withTap)> failure = [](bool) { return juce::String(); };
+
+    mac::MacEngineBackend::IoOpener opener()
+    {
+        return [this](const mac::AggregateIO::Params& params, const mac::AggregateIO::Callback&,
+                      juce::String& error) -> std::unique_ptr<mac::AggregateIO> {
+            withTap.push_back(params.tap != nullptr);
+            if (const auto why = failure(params.tap != nullptr); why.isNotEmpty()) {
+                error = why;
+                return nullptr;
+            }
+            return mac::AggregateIO::createDetached();
+        };
+    }
+};
+
+// The device checks answer "present" so the controller reaches openIO() without a real microphone.
+struct DevicesPresent : fixomic::EngineBackend {
+    explicit DevicesPresent(mac::MacEngineBackend& b) : backend(b) {}
+    mac::MacEngineBackend& backend;
+    bool driverInstalled() override { return true; }
+    bool micAvailable(const juce::String&) override { return true; }
+    bool micSupports48k(const juce::String&) override { return true; }
+    bool openIO(bool withTap, juce::String& error) override { return backend.openIO(withTap, error); }
+    void closeIO() override { backend.closeIO(); }
+    void applyFlags(bool aec, bool bypass) override { backend.applyFlags(aec, bypass); }
+};
+
+// A backend over the fake opener; system audio as `audioStatus` says (the real tap is created when
+// it is asked for: creating one opens no device and plays nothing).
+struct SeamRig {
+    fixomic::AecStage aec;
+    fixomic::PluginChain chain;
+    fixomic::ProcessingGraph graph{aec, chain};
+    fixomic::Config config;
+    FakeOpener fake;
+    mac::Permission audioStatus = mac::Permission::Granted;
+    std::vector<mac::WarningKind> kinds;
+    std::vector<juce::String> warnings;
+    int cleared = 0;
+    mac::MacEngineBackend backend{graph,
+                                  aec,
+                                  chain,
+                                  [this] { return config; },
+                                  {[] { return mac::Permission::Granted; }, nullptr},
+                                  {[this] { return audioStatus; }, nullptr, [] { return false; }},
+                                  fake.opener()};
+
+    SeamRig()
+    {
+        config.inputDeviceUid = "fake-mic";
+        config.aecEnabled = true;
+        backend.onWarning = [this](mac::WarningKind kind, juce::String text) {
+            kinds.push_back(kind);
+            warnings.push_back(text);
+        };
+        backend.onWarningCleared = [this] { ++cleared; };
+    }
+};
+
+} // namespace
+
+TEST_CASE("MacEngineBackend opens without the tap when the aggregate with it fails", "[backend][fallback]")
+{
+    SeamRig rig;
+    juce::String error;
+
+    SECTION("the tapless retry opens: mic only, with a warning that names the reason")
+    {
+        rig.fake.failure = [](bool tap) {
+            return tap ? juce::String("Impossibile avviare il dispositivo aggregato (AudioDeviceStart: 'nope')")
+                       : juce::String();
+        };
+        REQUIRE(rig.backend.openIO(true, error));
+        INFO("the first attempt must carry the tap (SystemAudioTap::create failed?)");
+        REQUIRE(rig.fake.withTap == std::vector<bool>{true, false});
+        REQUIRE(rig.backend.ioOpen());
+        REQUIRE_FALSE(rig.backend.tapActive());   // runs mic-only: residual echo, not silence
+        REQUIRE(rig.kinds == std::vector<mac::WarningKind>{mac::WarningKind::SystemAudioUnavailable});
+        REQUIRE(rig.warnings[0].startsWith("Audio di sistema non disponibile"));
+        REQUIRE(rig.warnings[0].contains("(AudioDeviceStart: 'nope')"));
+        REQUIRE(rig.backend.warningKind() == mac::WarningKind::SystemAudioUnavailable);
+        REQUIRE_FALSE(fixomic::ui::warningPane(*rig.backend.warningKind()).has_value());   // no pane fixes it
+        rig.backend.closeIO();
+        REQUIRE_FALSE(rig.backend.ioOpen());
+    }
+    SECTION("both attempts fail: the open fails with the tapless reason and no warning")
+    {
+        rig.fake.failure = [](bool tap) { return juce::String(tap ? "with the tap" : "without the tap"); };
+        REQUIRE_FALSE(rig.backend.openIO(true, error));
+        REQUIRE(rig.fake.withTap == std::vector<bool>{true, false});
+        REQUIRE(error == "without the tap");
+        REQUIRE(rig.warnings.empty());
+        REQUIRE_FALSE(rig.backend.ioOpen());
+        REQUIRE_FALSE(rig.backend.tapActive());
+    }
+    SECTION("the aggregate with the tap opens: one attempt, no warning")
+    {
+        REQUIRE(rig.backend.openIO(true, error));
+        REQUIRE(rig.fake.withTap == std::vector<bool>{true});
+        REQUIRE(rig.backend.tapActive());
+        REQUIRE(rig.warnings.empty());
+    }
+    SECTION("without a tap there is nothing to drop: one attempt")
+    {
+        rig.fake.failure = [](bool) { return juce::String("boom"); };
+        REQUIRE_FALSE(rig.backend.openIO(false, error));
+        REQUIRE(rig.fake.withTap == std::vector<bool>{false});
+        REQUIRE(error == "boom");
+        REQUIRE(rig.warnings.empty());
+    }
+}
+
+TEST_CASE("MacEngineBackend: each open starts without a warning; a retry that raises none leaves none",
+          "[backend][warnings]")
+{
+    SeamRig rig;
+    juce::String error;
+    const auto failing = [](bool) { return juce::String("Microfono non trovato (fake-mic)"); };
+    const auto working = [](bool) { return juce::String(); };
+
+    SECTION("a warning, then an Error, then a retry that opens")
+    {
+        rig.audioStatus = mac::Permission::Denied;
+        rig.fake.failure = failing;
+        REQUIRE_FALSE(rig.backend.openIO(true, error));   // Error, with the warning this attempt raised
+        REQUIRE(rig.backend.warningKind() == mac::WarningKind::SystemAudioDenied);
+        REQUIRE(rig.backend.warning().startsWith("Permesso audio di sistema negato"));
+        REQUIRE(rig.cleared == 0);
+
+        rig.audioStatus = mac::Permission::Granted;      // the user enabled it
+        rig.fake.failure = working;
+        REQUIRE(rig.backend.openIO(true, error));
+        REQUIRE(rig.backend.tapActive());
+        REQUIRE_FALSE(rig.backend.warningKind().has_value());
+        REQUIRE(rig.backend.warning().isEmpty());
+        REQUIRE(rig.cleared == 1);
+    }
+    SECTION("through the EngineController: Error, then tick() retries to Running")
+    {
+        DevicesPresent devices{rig.backend};
+        double now = 0.0;
+        fixomic::EngineController engine(devices, [&] { return now; });
+        rig.audioStatus = mac::Permission::Denied;
+        rig.fake.failure = failing;
+        engine.setConfig(rig.config);
+        engine.onDemandChanged(true);
+        REQUIRE(engine.state() == fixomic::EngineState::Error);
+        REQUIRE(rig.backend.warningKind() == mac::WarningKind::SystemAudioDenied);
+
+        rig.audioStatus = mac::Permission::Granted;
+        rig.fake.failure = working;
+        now = fixomic::EngineController::kRetrySeconds + 0.1;
+        engine.tick();
+        REQUIRE(engine.state() == fixomic::EngineState::Running);   // straight from Error: no Starting
+        REQUIRE_FALSE(rig.backend.warningKind().has_value());
+        REQUIRE(rig.cleared == 1);
+    }
+    SECTION("closing keeps the warning of the last open; the next open that raises none clears it")
+    {
+        rig.audioStatus = mac::Permission::Denied;
+        REQUIRE(rig.backend.openIO(true, error));         // opens without the tap, and says why
+        REQUIRE(rig.backend.warningKind() == mac::WarningKind::SystemAudioDenied);
+        rig.backend.closeIO();
+        REQUIRE(rig.backend.warningKind() == mac::WarningKind::SystemAudioDenied);
+        REQUIRE(rig.cleared == 0);
+        REQUIRE(rig.backend.openIO(true, error));         // still denied: cleared, raised again
+        REQUIRE(rig.backend.warningKind() == mac::WarningKind::SystemAudioDenied);
+        REQUIRE(rig.kinds.size() == 2);
+        REQUIRE(rig.cleared == 1);
+        REQUIRE(rig.backend.openIO(false, error));        // AEC off: nothing to warn about
+        REQUIRE_FALSE(rig.backend.warningKind().has_value());
+        REQUIRE(rig.cleared == 2);
+    }
+}
+
+// A tap that delivers only silence while the output runs may be a denied permission or just a quiet
+// call (the preflight is stale after the prompt in this process): the warning says what fixomic sees
+// and where to check, without claiming a denial.
+TEST_CASE("MacEngineBackend's silent-tap warning does not claim the permission is denied", "[backend][warnings]")
+{
+    const auto text = mac::MacEngineBackend::systemAudioSilentWarning();
+    REQUIRE_FALSE(text.containsIgnoreCase("negat"));
+    REQUIRE_FALSE(text.containsIgnoreCase("probabilmente"));
+    REQUIRE(text.contains("silenzio"));
+    REQUIRE(text.contains("Registrazione schermo e audio di sistema"));
+    REQUIRE(fixomic::ui::warningPane(mac::WarningKind::SystemAudioSilent) == mac::PrivacyPane::SystemAudio);
+}
+
+// ---- hardware (deferred while audio must stay silent) ------------------------------------------
+
+TEST_CASE("MacEngineBackend falls back to the real mic-only aggregate when the tap one fails", "[backend][hardware]")
+{
+    Engine e;
+    std::vector<bool> attempts;
+    // The aggregate with the tap "fails"; the tapless one is the real one.
+    mac::MacEngineBackend backend{e.graph,
+                                  e.aec,
+                                  e.chain,
+                                  [&] { return e.config; },
+                                  {},
+                                  {[] { return mac::Permission::Granted; }, nullptr, nullptr},
+                                  [&](const mac::AggregateIO::Params& params, const mac::AggregateIO::Callback& callback,
+                                      juce::String& error) -> std::unique_ptr<mac::AggregateIO> {
+                                      attempts.push_back(params.tap != nullptr);
+                                      if (params.tap != nullptr) {
+                                          error = "simulated failure with the tap";
+                                          return nullptr;
+                                      }
+                                      return mac::MacEngineBackend::openAggregate(params, callback, error);
+                                  }};
+    std::vector<mac::WarningKind> kinds;
+    backend.onWarning = [&](mac::WarningKind kind, juce::String) { kinds.push_back(kind); };
+    juce::String error;
+    REQUIRE(backend.openIO(true, error));
+    INFO(error.toStdString());
+    REQUIRE(attempts == std::vector<bool>{true, false});
+    REQUIRE(kinds == std::vector<mac::WarningKind>{mac::WarningKind::SystemAudioUnavailable});
+    REQUIRE_FALSE(backend.tapActive());
+    pumpMainLoop(1.0, [&] { return backend.io()->stats().callbacks > 50; });
+    REQUIRE(backend.io()->stats().callbacks > 50);
+    REQUIRE_FALSE(e.graph.aecActive());
+    backend.closeIO();
 }
