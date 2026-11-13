@@ -8,8 +8,9 @@
 #   scripts/package-release.sh --clean   wipes build-release/ first
 #
 # Everything is built under build-release/ (the CMake build and the driver); the dev build in build/
-# is never written to. The universal WebRTC APM comes from scripts/build-webrtc-apm.sh, run here only
-# when it is missing (that script works in build/deps and third_party/install). The JUCE and Catch2
+# is never written to. The universal WebRTC APM and its licence texts come from
+# scripts/build-webrtc-apm.sh (third_party/install/webrtc-apm), run here only when they are missing
+# (that script works in build/deps and third_party/install). The JUCE and Catch2
 # checkouts of the dev build are reused when they are clean and at the pinned tag, otherwise CMake
 # clones them.
 #
@@ -32,6 +33,7 @@ CHECK_DIR="$REL/package-check"
 DRIVER_OUT="$REL/driver"
 ENTITLEMENTS="$ROOT/cmake/fixomic.entitlements"
 APM_LIB="$ROOT/third_party/install/webrtc-apm/universal/lib/libwebrtc-audio-processing-2.a"
+APM_LICENSES="$ROOT/third_party/install/webrtc-apm/licenses"   # scripts/build-webrtc-apm.sh
 ARCHS="arm64 x86_64"
 
 # The driver's local diagnostic patches (scripts/build-driver.sh) never go into a release.
@@ -87,7 +89,8 @@ check_universal() {
 check_minos() {
     local what="$1" file="$2" arch minos
     for arch in $ARCHS; do
-        minos="$(vtool -arch "$arch" -show-build "$file" | awk '$1 == "minos" && !seen { print $2; seen = 1 }')"
+        minos="$(vtool -arch "$arch" -show-build "$file" | awk '$1 == "minos" && !seen { print $2; seen = 1 }')" \
+            || fail "vtool cannot read the build version of $what ($arch): $file"
         [[ "$minos" == "$DEPLOYMENT_TARGET" ]] || fail "$what ($arch) has minos '$minos', expected $DEPLOYMENT_TARGET"
     done
     ok "$what: minos $DEPLOYMENT_TARGET on $ARCHS"
@@ -96,15 +99,16 @@ check_minos() {
 plist_value() { /usr/libexec/PlistBuddy -c "Print :$2" "$1" 2>/dev/null || true; }
 
 # A checkout of the dev build that CMake may use instead of cloning: clean and at the tag pinned in
-# cmake/Dependencies.cmake. Prints the -D / -U argument for FetchContent.
+# cmake/Dependencies.cmake. Prints the -D / -U argument for FetchContent. Read-only: git runs without
+# optional locks, so it never writes to (or waits on) the dev build's index.
 fetchcontent_source_arg() {
     local name="$1" src="$2" var tag
     var="FETCHCONTENT_SOURCE_DIR_$(tr '[:lower:]' '[:upper:]' <<<"$name")"
     tag="$(awk -v name="$name" '/FetchContent_Declare\(/ { getline; dep = $1 } $1 == "GIT_TAG" && dep == name { print $2 }' \
         "$ROOT/cmake/Dependencies.cmake")"
     if [[ -n "$tag" && -f "$src/CMakeLists.txt" ]] \
-        && [[ "$(git -C "$src" describe --tags --exact-match 2>/dev/null)" == "$tag" ]] \
-        && [[ -z "$(git -C "$src" status --porcelain 2>/dev/null)" ]]; then
+        && [[ "$(git --no-optional-locks -C "$src" describe --tags --exact-match 2>/dev/null)" == "$tag" ]] \
+        && [[ -z "$(git --no-optional-locks -C "$src" status --porcelain 2>/dev/null)" ]]; then
         echo "-D$var=$src"
     else
         echo "-U$var"
@@ -119,6 +123,10 @@ deps() {
         "$ROOT/scripts/build-webrtc-apm.sh"
     fi
     check_universal "APM" "$APM_LIB"
+    if [[ ! -f "$APM_LICENSES/WebRTC-LICENSE.txt" ]]; then
+        echo "$APM_LICENSES missing: copying them with scripts/build-webrtc-apm.sh --licenses-only"
+        "$ROOT/scripts/build-webrtc-apm.sh" --licenses-only
+    fi
 
     step "driver (scripts/build-driver.sh -> build-release/driver)"
     FIXOMIC_DRIVER_OUT_DIR="$DRIVER_OUT" "$ROOT/scripts/build-driver.sh"
@@ -144,7 +152,8 @@ configure() {
     # Every compile command targets both architectures and the deployment target.
     local db="$REL/compile_commands.json" total missing
     [[ -f "$db" ]] || fail "$db missing"
-    total="$(grep -c '"command":' "$db")"
+    total="$(grep -c '"command":' "$db" || true)"
+    [[ "$total" -gt 0 ]] || fail "no compile commands in $db"
     missing="$(grep '"command":' "$db" | grep -v -e "-mmacosx-version-min=$DEPLOYMENT_TARGET" | grep -c . || true)"
     [[ "$missing" -eq 0 ]] || fail "$missing of $total compile commands lack -mmacosx-version-min=$DEPLOYMENT_TARGET"
     for arch in $ARCHS; do
@@ -162,15 +171,14 @@ build() {
 # ---- licences ------------------------------------------------------------------------------------
 # The licence texts travel with the binary (NOTICE lists them): fixomic's, BlackHole's, and those of
 # the third-party code compiled into the app, taken from the very sources it was built from: the
-# JUCE checkout CMake used and the APM source scripts/build-webrtc-apm.sh cloned.
+# JUCE checkout CMake used, and for the APM the copies scripts/build-webrtc-apm.sh installed next to
+# the libraries (from the source it built them from).
 LICENSE_COUNT=0
 add_licenses() {
-    local dest="$1" juce apm abseil
+    local dest="$1" juce apm="$APM_LICENSES"
     juce="$(sed -nE 's/^JUCE_SOURCE_DIR:STATIC=(.*)/\1/p' "$REL/CMakeCache.txt")"
     [[ -d "$juce/modules" ]] || fail "cannot find the JUCE source (JUCE_SOURCE_DIR in $REL/CMakeCache.txt)"
-    apm="$ROOT/build/deps/webrtc-apm-src"
-    abseil="$(sed -nE 's/^directory *= *([^ ]+).*/\1/p' "$apm/subprojects/abseil-cpp.wrap" 2>/dev/null || true)"
-    [[ -n "$abseil" ]] || fail "cannot find the APM source with its abseil wrap in $apm (scripts/build-webrtc-apm.sh)"
+    [[ -d "$apm" ]] || fail "$apm missing (scripts/build-webrtc-apm.sh --licenses-only)"
     local files=(
         "$ROOT/LICENSE"                                                          fixomic-LICENSE.txt
         "$ROOT/NOTICE"                                                           NOTICE.txt
@@ -182,13 +190,13 @@ add_licenses() {
         "$juce/modules/juce_graphics/image_formats/pnglib/LICENSE"               libpng-LICENSE.txt
         "$juce/modules/juce_graphics/image_formats/jpglib/README"                libjpeg-README.txt
         "$juce/modules/juce_core/zip/zlib/README"                                zlib-README.txt
-        "$apm/webrtc/LICENSE"                                                    WebRTC-LICENSE.txt
-        "$apm/webrtc/PATENTS"                                                    WebRTC-PATENTS.txt
-        "$apm/subprojects/$abseil/LICENSE"                                       Abseil-LICENSE.txt
-        "$apm/webrtc/third_party/rnnoise/COPYING"                                RNNoise-COPYING.txt
-        "$apm/webrtc/third_party/pffft/LICENSE"                                  PFFFT-LICENSE.txt
-        "$apm/webrtc/common_audio/third_party/ooura/LICENSE"                     Ooura-FFT-LICENSE.txt
-        "$apm/webrtc/common_audio/third_party/spl_sqrt_floor/LICENSE"            spl_sqrt_floor-LICENSE.txt
+        "$apm/WebRTC-LICENSE.txt"                                                WebRTC-LICENSE.txt
+        "$apm/WebRTC-PATENTS.txt"                                                WebRTC-PATENTS.txt
+        "$apm/Abseil-LICENSE.txt"                                                Abseil-LICENSE.txt
+        "$apm/RNNoise-COPYING.txt"                                               RNNoise-COPYING.txt
+        "$apm/PFFFT-LICENSE.txt"                                                 PFFFT-LICENSE.txt
+        "$apm/Ooura-FFT-LICENSE.txt"                                             Ooura-FFT-LICENSE.txt
+        "$apm/spl_sqrt_floor-LICENSE.txt"                                        spl_sqrt_floor-LICENSE.txt
     )
     mkdir -p "$dest"
     local i
@@ -230,7 +238,7 @@ checks() {
     (cd "$DIST" && shasum -a 256 -c "$ZIP_NAME.sha256")
 
     local entries
-    entries="$(zipinfo -1 "$ZIP")"
+    entries="$(zipinfo -1 "$ZIP")" || fail "zipinfo cannot list $ZIP"
     ! grep -qE '(^|/)(__MACOSX/|\._)' <<<"$entries" || fail "the zip has AppleDouble entries (extended attributes)"
     [[ "$(head -1 <<<"$entries")" == "fixomic.app/" ]] || fail "the zip does not start with fixomic.app/"
     ! xattr -p com.apple.quarantine "$ZIP" >/dev/null 2>&1 || fail "$ZIP itself is quarantined"
@@ -277,18 +285,18 @@ checks() {
     codesign --verify --strict --verbose=2 "$driver"
     local info
     for target in "$app" "$driver"; do
-        info="$(codesign -dv "$target" 2>&1)"
+        info="$(codesign -dv "$target" 2>&1)" || fail "codesign cannot describe $target: $info"
         grep -q '^Signature=adhoc$' <<<"$info" || fail "$target is not signed ad-hoc"
         ! grep -qE '^CodeDirectory .*flags=.*runtime' <<<"$info" || fail "$target has the hardened runtime"
         echo "$(basename "$target"): $(grep -E '^(Identifier|CodeDirectory|Signature)' <<<"$info" | tr '\n' ' ')"
     done
     ok "signed ad-hoc, no hardened runtime"
 
-    # Developer commands (src/app/Main.cpp, FIXOMIC_DEV_COMMANDS) are compiled out of Release.
+    # Developer commands (src/app/Main.cpp, FIXOMIC_DEV_COMMANDS) exist only in Debug builds.
     local options strings_out found=""
-    options="$(grep -oE 'arg == "--[a-z-]+"' "$ROOT/src/app/Main.cpp" | sed -E 's/.*"(--[a-z-]+)"/\1/' | sort -u)"
+    options="$({ grep -oE 'arg == "--[a-z-]+"' "$ROOT/src/app/Main.cpp" || true; } | sed -E 's/.*"(--[a-z-]+)"/\1/' | sort -u)"
     [[ -n "$options" ]] || fail "no developer commands found in src/app/Main.cpp"
-    strings_out="$(strings -a "$bin")"
+    strings_out="$(strings -a "$bin")" || fail "strings cannot read $bin"
     for option in $options; do
         if grep -qF -- "$option" <<<"$strings_out"; then found+=" $option"; fi
     done

@@ -30,29 +30,36 @@ Requisiti: macOS 14.4 o successivo, Mac con Apple Silicon o Intel.
 
 ## Latenza
 
-La riga *Latenza* del pannello mostra quanto fixomic ritarda la tua voce: buffer, cancellazione
-dell'eco, plugin e dispositivi.
+La riga *Latenza* del pannello mostra quanto la tua voce arriva in ritardo alle altre app:
+buffer, cancellazione dell'eco, plugin e dispositivi. Sono cifre calcolate dalle latenze che
+ciascuna parte dichiara, non una misura da capo a capo.
 
-| Senza plugin e senza dispositivi | Buffer 64 | Buffer 128 (predefinito) |
+Quello che aggiunge fixomic, senza plugin:
+
+| | Buffer 64 | Buffer 128 (predefinito) |
 |---|---|---|
 | Cancellazione eco attiva | 21,6 ms | 24,3 ms |
 | Cancellazione eco spenta | 2,7 ms | 5,3 ms |
 
-Con buffer 128 sono i valori misurati sul Mac di sviluppo; con buffer 64, la stessa somma.
-Si aggiungono la latenza che i plugin dichiarano e quella dei dispositivi, di solito qualche
-millisecondo.
+È il doppio del buffer (un buffer per ricevere l'audio, uno per consegnarlo), più la cancellazione
+dell'eco quando è attiva. Il totale del pannello comprende anche la latenza che i plugin dichiarano
+e quella dei dispositivi. Sul Mac di sviluppo, con le cuffie HyperX sul jack combo, i dispositivi
+aggiungono circa 4,8 ms: senza plugin il pannello mostra 29,1 ms (eco attiva, buffer 128), 10,2 ms
+(eco spenta, buffer 128) e 7,5 ms (eco spenta, buffer 64).
 
-L'obiettivo del progetto era ≤ 16 ms con la cancellazione dell'eco e ≤ 5 ms senza. **Con la
-cancellazione attiva non è raggiunto.** Il motivo è WebRTC AEC3, che da solo aggiunge 19,0 ms
-(910 campioni a 48 kHz). Lavora a blocchi fissi di 10 ms, e fixomic tiene un blocco di scorta per
-disaccoppiarlo dal buffer; il resto è il ritardo interno dell'AEC3, circa 9 ms. Per confronto,
-Discord aggiunge da solo circa 20 ms di codifica, più la rete. Se le tue cuffie non rientrano nel
-microfono, spegni la cancellazione dell'eco: risparmi quei 19 ms.
+Gli obiettivi del progetto riguardano solo quello che aggiunge fixomic: ≤ 16 ms con la
+cancellazione dell'eco e ≤ 5 ms senza. **Con la cancellazione attiva non è raggiunto:** 24,3 ms.
+Il motivo è WebRTC AEC3, che da solo aggiunge 19,0 ms (910 campioni a 48 kHz). Lavora a blocchi
+fissi di 10 ms, e fixomic tiene un blocco di scorta per disaccoppiarlo dal buffer; il resto è il
+ritardo interno dell'AEC3, circa 9 ms. Con la cancellazione spenta, 5,3 ms con buffer 128 sono
+appena oltre l'obiettivo; con buffer 64, 2,7 ms lo rispettano. Per confronto, Discord aggiunge da
+solo circa 20 ms di codifica, più la rete. Se le tue cuffie non rientrano nel microfono, spegni la
+cancellazione dell'eco: risparmi quei 19 ms.
 
 ## Installazione
 
-1. Scarica `fixomic-<versione>.zip` e `fixomic-<versione>.zip.sha256` dalle release del progetto
-   su GitHub. Se vuoi, verifica il file:
+1. Scarica `fixomic-<versione>.zip` e `fixomic-<versione>.zip.sha256` dalle release del
+   repository del progetto (l'indirizzo è in [Licenze](#licenze)). Se vuoi, verifica il file:
 
    ```sh
    shasum -a 256 -c fixomic-<versione>.zip.sha256
@@ -97,13 +104,46 @@ punto compare **Aggiorna driver**.
 
 ## Usarlo in Discord
 
-In Discord: **Impostazioni utente → Voce e video → Dispositivo di ingresso → fixomic Mic**.
+In Discord: **Impostazioni utente → Voce e video → Dispositivo di input → fixomic Mic**.
 fixomic si accende da solo quando Discord inizia a usare il microfono, e si spegne circa 3 secondi
 dopo che ha smesso. Se vuoi sentire solo l'elaborazione di fixomic, spegni in Discord la
 cancellazione dell'eco e la soppressione del rumore.
 
 Funziona allo stesso modo in Zoom, Meet, OBS e in qualsiasi app che ti lascia scegliere il
-microfono.
+microfono. Per i giochi e le app che usano solo l'ingresso predefinito del Mac, scegli fixomic Mic
+in **Impostazioni di Sistema → Suono → Ingresso**.
+
+## Limiti noti
+
+- **Solo microfoni a 48 kHz.** fixomic lavora soltanto a 48 kHz e rifiuta un microfono che non li
+  offre: il pannello mostra *Questo microfono non supporta 48 kHz*. È il caso di quasi tutti i
+  microfoni delle cuffie Bluetooth, che nelle chiamate passano al profilo HFP a 16 o 24 kHz. Usa il
+  microfono del Mac, uno USB o uno sul jack, e le cuffie Bluetooth solo per ascoltare.
+- **I permessi si chiedono di nuovo dopo ogni aggiornamento.** L'app è firmata ad-hoc, non da uno
+  sviluppatore registrato presso Apple: per macOS ogni versione è un'app diversa, quindi dopo un
+  aggiornamento chiede di nuovo il microfono e la *Registrazione schermo e audio di sistema*.
+- **Latenza con la cancellazione dell'eco** oltre l'obiettivo del progetto: vedi [Latenza](#latenza).
+
+## Se qualcosa non va
+
+- **Un plugin non compare più tra quelli da aggiungere.** Un plugin che fa cadere la scansione
+  finisce in una lista nera e non viene più provato. Per riprovarlo, esci da fixomic e cancella la
+  cache dei plugin, poi riapri fixomic, che li analizza di nuovo tutti:
+
+  ```sh
+  rm ~/Library/Application\ Support/fixomic/plugins.xml
+  ```
+
+- **All'avvio compare *L'ultimo avvio si è interrotto caricando i plugin*.** Un plugin della catena
+  ha fatto chiudere fixomic all'avvio precedente. Questa volta la catena è caricata senza plugin
+  (le righe dicono *Plugin non trovato*): togli quello che dà problemi. Al prossimo avvio fixomic
+  riprova a caricare gli altri.
+- **fixomic riceve solo silenzio dall'audio di sistema** e l'eco resta: controlla che fixomic sia
+  abilitato in **Impostazioni di Sistema → Privacy e sicurezza → Registrazione schermo e audio di
+  sistema**. L'avviso può comparire anche durante una chiamata in cui nessuno parla.
+- **Il volume di fixomic Mic** in Impostazioni di Sistema non ha effetto, così le app che regolano
+  da sole il livello del microfono (Zoom) non possono abbassarlo. Il livello si regola con i plugin
+  della catena.
 
 ## Disinstallazione
 
@@ -134,7 +174,7 @@ brew install cmake ninja meson
 ```
 
 ```sh
-git clone --recurse-submodules <url del repository> fixomic
+git clone --recurse-submodules <url del repository> fixomic   # da impostare prima della pubblicazione
 cd fixomic
 scripts/build-webrtc-apm.sh            # una volta: WebRTC AEC3, librerie statiche arm64, x86_64 e universali
 scripts/build-driver.sh                # il driver universale, in build/driver (finisce dentro l'app)
@@ -171,6 +211,9 @@ Note:
 - **Terze parti**: JUCE (AGPL-3.0), WebRTC audio processing (BSD-3-Clause), VST3 SDK (MIT) e le
   altre componenti incluse sono elencate in [NOTICE](NOTICE). I testi delle licenze sono anche
   dentro l'app, in `fixomic.app/Contents/Resources/Licenses`. Catch2 (BSL-1.0) serve solo ai test.
+- **Codice sorgente**: tutto il sorgente dell'app e del driver, come chiedono la AGPL-3.0 e la
+  GPL-3.0, è nel repository del progetto: **`<url del repository>` — da impostare prima della
+  pubblicazione.** Le release si scaricano dallo stesso repository.
 
 ---
 
@@ -198,28 +241,36 @@ Requirements: macOS 14.4 or later, a Mac with Apple Silicon or Intel.
 
 ### Latency
 
-The panel's *Latenza* row shows how much fixomic delays your voice: buffer, echo cancellation,
-plugins and devices.
+The panel's *Latenza* row shows how late your voice reaches other apps: buffer, echo cancellation,
+plugins and devices. These figures are computed from the latency each part declares, not measured
+end to end.
 
-| Without plugins or devices | Buffer 64 | Buffer 128 (default) |
+What fixomic adds, without plugins:
+
+| | Buffer 64 | Buffer 128 (default) |
 |---|---|---|
 | Echo cancellation on | 21.6 ms | 24.3 ms |
 | Echo cancellation off | 2.7 ms | 5.3 ms |
 
-At buffer 128 these are the values measured on the development Mac; at buffer 64, the same sum.
-On top come the latency the plugins declare and the devices' own, usually a few milliseconds.
+That is twice the buffer (one buffer to receive the audio, one to deliver it), plus echo
+cancellation when it is on. The panel's total also includes the latency the plugins declare and the
+devices' own. On the development Mac, with the HyperX headset on the combo jack, the devices add
+about 4.8 ms: without plugins the panel shows 29.1 ms (echo cancellation on, buffer 128), 10.2 ms
+(off, buffer 128) and 7.5 ms (off, buffer 64).
 
-The project's target was ≤ 16 ms with echo cancellation and ≤ 5 ms without. **With echo
-cancellation on it is not met.** The reason is WebRTC AEC3, which alone adds 19.0 ms (910 samples
-at 48 kHz). It works in fixed 10 ms blocks, and fixomic keeps one block in reserve to decouple it
-from the buffer; the rest is AEC3's own internal delay, about 9 ms. For comparison, Discord alone
-adds about 20 ms of encoding, plus the network. If your headphones do not leak into the
-microphone, turn echo cancellation off and save those 19 ms.
+The project's targets are about what fixomic adds: ≤ 16 ms with echo cancellation and ≤ 5 ms
+without. **With echo cancellation on it is not met:** 24.3 ms. The reason is WebRTC AEC3, which
+alone adds 19.0 ms (910 samples at 48 kHz). It works in fixed 10 ms blocks, and fixomic keeps one
+block in reserve to decouple it from the buffer; the rest is AEC3's own internal delay, about 9 ms.
+With echo cancellation off, 5.3 ms at buffer 128 is just over the target; at buffer 64, 2.7 ms
+meets it. For comparison, Discord alone adds about 20 ms of encoding, plus the network. If your
+headphones do not leak into the microphone, turn echo cancellation off and save those 19 ms.
 
 ### Installing
 
-1. Download `fixomic-<version>.zip` and `fixomic-<version>.zip.sha256` from the project's GitHub
-   releases. To check the file: `shasum -a 256 -c fixomic-<version>.zip.sha256`.
+1. Download `fixomic-<version>.zip` and `fixomic-<version>.zip.sha256` from the releases of the
+   project's repository (its address is under [Licences](#licences)). To check the file:
+   `shasum -a 256 -c fixomic-<version>.zip.sha256`.
 2. Open the zip and drag **fixomic.app** to **Applications**.
 3. **The app is not signed by a developer registered with Apple**, so macOS blocks it on the first
    launch. Open it in one of these ways:
@@ -251,11 +302,42 @@ the same place.
 
 ### Using it in Discord
 
-In Discord: **User Settings → Voice & Video → Input Device → fixomic Mic**. fixomic turns on by
-itself when Discord starts using the microphone, and off about 3 seconds after it stops. To hear
-only fixomic's processing, turn off Discord's own echo cancellation and noise suppression.
+In Discord: **User Settings → Voice & Video → Input Device → fixomic Mic** (in Italian:
+*Impostazioni utente → Voce e video → Dispositivo di input*). fixomic turns on by itself when
+Discord starts using the microphone, and off about 3 seconds after it stops. To hear only
+fixomic's processing, turn off Discord's own echo cancellation and noise suppression.
 
-It works the same way in Zoom, Meet, OBS and any app that lets you choose the microphone.
+It works the same way in Zoom, Meet, OBS and any app that lets you choose the microphone. For games
+and apps that only use the Mac's default input, choose fixomic Mic in **System Settings → Sound →
+Input**.
+
+### Known limitations
+
+- **48 kHz microphones only.** fixomic works only at 48 kHz and refuses a microphone that does not
+  offer it: the panel shows *Questo microfono non supporta 48 kHz*. That is the case for almost
+  every Bluetooth headset microphone, which switches to the HFP profile at 16 or 24 kHz during
+  calls. Use the Mac's microphone, a USB one or one on the jack, and the Bluetooth headset only to
+  listen.
+- **Permissions are asked again after every update.** The app is signed ad-hoc, not by a developer
+  registered with Apple: to macOS every version is a different app, so after an update it asks
+  again for the microphone and for *Screen & System Audio Recording*.
+- **Latency with echo cancellation** is over the project's target: see [Latency](#latency).
+
+### Troubleshooting
+
+- **A plugin no longer shows up among those you can add.** A plugin that crashes the scan is
+  blacklisted and not tried again. To retry it, quit fixomic and delete the plugin cache, then open
+  fixomic again, which scans them all anew:
+  `rm ~/Library/Application\ Support/fixomic/plugins.xml`.
+- **At launch, *L'ultimo avvio si è interrotto caricando i plugin* appears** (the last launch was
+  interrupted while loading the plugins). A plugin in the chain made fixomic quit at the previous
+  launch. This time the chain is loaded without plugins (its rows say *Plugin non trovato*): remove
+  the one causing trouble. At the next launch fixomic tries to load the others again.
+- **fixomic receives only silence from the system audio** and echo remains: check that fixomic is
+  enabled in **System Settings → Privacy & Security → Screen & System Audio Recording**. The notice
+  can also appear during a call in which nobody speaks.
+- **fixomic Mic's volume** in System Settings has no effect, so apps that adjust the microphone
+  level by themselves (Zoom) cannot lower it. Set the level with the plugins in the chain.
 
 ### Uninstalling
 
@@ -277,7 +359,7 @@ driver is built with `xcodebuild`), and [Homebrew](https://brew.sh) with
 `brew install cmake ninja meson`.
 
 ```sh
-git clone --recurse-submodules <repository url> fixomic
+git clone --recurse-submodules <repository url> fixomic   # to be set before publication
 cd fixomic
 scripts/build-webrtc-apm.sh            # once: WebRTC AEC3, static libraries for arm64, x86_64 and universal
 scripts/build-driver.sh                # the universal driver, in build/driver (it goes inside the app)
@@ -314,3 +396,7 @@ Notes:
 - **Third parties**: JUCE (AGPL-3.0), WebRTC audio processing (BSD-3-Clause), the VST3 SDK (MIT) and
   the other bundled components are listed in [NOTICE](NOTICE). The licence texts are also inside
   the app, in `fixomic.app/Contents/Resources/Licenses`. Catch2 (BSL-1.0) is used only by the tests.
+- **Source code**: the complete source of the app and of the driver, as the AGPL-3.0 and the
+  GPL-3.0 require, is in the project's repository: **`<repository url>` — to be set before
+  publication (*da impostare prima della pubblicazione*).** The releases are downloaded from the
+  same repository.

@@ -2,22 +2,24 @@ fixomic
 Copyright (C) 2026 Manolo Zocco
 Licensed under the GNU Affero General Public License v3.0 or later (see LICENSE).
 
-fixomic.app carries a copy of every licence below in Contents/Resources/Licenses
-(scripts/package-release.sh puts them there). The source of everything listed is in this
-repository or fetched by its build: cmake/Dependencies.cmake (JUCE, Catch2),
-scripts/build-webrtc-apm.sh (WebRTC audio processing), the driver/BlackHole submodule.
+fixomic.app carries a copy of every licence listed under "Distributed in fixomic.app" in
+Contents/Resources/Licenses (scripts/package-release.sh puts them there). The source of everything
+listed is in this repository or fetched by its build: cmake/Dependencies.cmake (JUCE, and Catch2
+for the tests), scripts/build-webrtc-apm.sh (WebRTC audio processing), the driver/BlackHole
+submodule.
 
 
 Distributed in fixomic.app
 --------------------------
 
 - BlackHole v0.7.2 (virtual audio driver)
-  Copyright (C) 2019-2026 Existential Audio Inc.
+  BlackHole © 2019–2026 Existential Audio Inc.
   License: GPL-3.0 (see driver/LICENSE)
   https://github.com/ExistentialAudio/BlackHole
   The fixomic driver (fixomic.app/Contents/Resources/fixomic.driver, built from driver/) is an
-  unofficial build of BlackHole v0.7.2 with fixomic names, icon and a small branding patch; it is
-  not endorsed by Existential Audio. It is a separate program, a Core Audio HAL plug-in loaded by
+  unofficial build of BlackHole v0.7.2 with fixomic names and icon, a small branding patch and a
+  patch that answers the default-device properties per device; it is not endorsed by Existential
+  Audio. It is a separate program, a Core Audio HAL plug-in loaded by
   coreaudiod, and carries its own copy of the GPL-3.0. Its complete source: the driver/BlackHole
   submodule (tag v0.7.2), driver/patches and scripts/build-driver.sh.
 
@@ -58,6 +60,7 @@ Distributed in fixomic.app
 Used only to build and test, not distributed
 --------------------------------------------
 
-- Catch2 v3.9.1 (test framework)
+- Catch2 v3.9.1 (test framework): links only into the test binaries; neither fixomic.app nor
+  its Licenses folder contains it.
   License: BSL-1.0
   https://github.com/catchorg/Catch2
