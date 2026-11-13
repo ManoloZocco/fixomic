@@ -53,7 +53,8 @@ public:
         repaint();
     }
 
-    // The list stopped this row's drag: the rest of the press is ignored.
+    // The list stopped this row's drag, or the chain changed under a press that had not become a
+    // drag yet: the rest of the press is ignored.
     void cancelPress() {
         dragging_ = false;
         pressed_ = false;
@@ -230,6 +231,8 @@ void ChainList::setSlots(std::vector<PluginChain::SlotInfo> slots) {
     const bool afterEdit = std::exchange(awaitingSlots_, false);
     if (slots == slots_ && !afterEdit) return;
     stopDrag();   // the indices it was about may be gone
+    // So may the slot under a press that has not become a drag yet (a click on its name included).
+    for (auto& row : rows_) row->cancelPress();
     slots_ = std::move(slots);
     // Rows are kept and refilled by index: only the surplus is destroyed.
     while (rows_.size() > slots_.size()) rows_.pop_back();

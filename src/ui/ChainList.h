@@ -28,8 +28,8 @@ namespace fixomic::ui {
 // text ink with a ring at the handle marks the gap it will drop into (no line where it would stay),
 // and an enclosing Viewport scrolls when the pointer nears its edges. Released away from the list
 // (more than a row above or below it, or past the panel's sides: no line there) the drag is
-// cancelled; so is it by cancelDrag() (Escape) and by a chain change. A cancelled press stays
-// cancelled until the button is released.
+// cancelled; so is it by cancelDrag() (Escape) and by a chain change, which also cancels a press that
+// has not become a drag yet. A cancelled press stays cancelled until the button is released.
 //
 // Its bounds reach Theme::kFlatTextInset past the content edges on both sides, so the flat button's
 // text lines up with the panel's content; setSlots() sets its own height (heightForWidth()), and the

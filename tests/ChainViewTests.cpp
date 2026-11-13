@@ -171,6 +171,31 @@ TEST_CASE("ChainList turns a drop into movePlugin(from, to)", "[ui][chainview]")
         dragRow(list, 0, 30.0f, 3.0f * ChainList::kRowHeight - 4.0f);
         REQUIRE(recorder.moves == std::vector<std::pair<int, int>>{{0, 2}});
     }
+    SECTION("a chain change before the drag began cancels the press too") {
+        // Pressed on the name, the chain changes under the threshold: the row may now show another
+        // slot, so neither a drag nor a click may follow from this press.
+        auto& row = *list.row(0);
+        const juce::Point<float> down{30.0f, 16.0f};
+        row.mouseDown(mouseAt(row, down, down, false));
+        auto changed = threeSlots();
+        std::swap(changed[0], changed[1]);
+        list.setSlots(changed);
+        row.mouseDrag(mouseAt(row, {30.0f, 70.0f}, down, true));   // past the threshold
+        REQUIRE_FALSE(list.draggedRow().has_value());
+        row.mouseUp(mouseAt(row, {30.0f, 70.0f}, down, true));
+        REQUIRE(recorder.moves.empty());
+        REQUIRE(recorder.editors.empty());
+
+        // A press released without moving, on the name, after a change: no editor either.
+        row.mouseDown(mouseAt(row, down, down, false));
+        list.setSlots(threeSlots());
+        row.mouseUp(mouseAt(row, down, down, false));
+        REQUIRE(recorder.editors.empty());
+
+        // The next press works.
+        dragRow(list, 0, 30.0f, 3.0f * ChainList::kRowHeight - 4.0f);
+        REQUIRE(recorder.moves == std::vector<std::pair<int, int>>{{0, 2}});
+    }
     SECTION("released away from the list: cancelled, nothing moves") {
         const float rows = 3.0f * ChainList::kRowHeight;
         const float listHeight = static_cast<float>(list.getHeight());
