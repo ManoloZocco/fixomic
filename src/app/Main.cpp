@@ -23,7 +23,9 @@
 //   --set-input <uid>           selects the microphone, as the settings do, e.g.
 //                               --set-input BuiltInHeadphoneInputDevice
 //   --set-buffer <64|128|256>   sets the buffer size, as the settings do (applied at once)
-//   --status                    engine state, chain, latency, scan state, open IO, meters
+//   --set-aec <0|1>             turns echo cancellation off / on, as the panel's switch does
+//   --status                    engine state, chain, latency (and its breakdown), scan state, open IO,
+//                               meters
 //   --list-effects              the catalog's effects
 //   --add-plugin <name> [fmt]   adds the first effect named <name> (format AudioUnit / VST3)
 //   --remove-plugin <i> | --open-editor <i> | --bypass <i> <0|1>
@@ -96,6 +98,12 @@ void printStatus(AppController& app, ui::TrayIcon& tray) {
         + (page == ui::MainPanel::Page::Onboarding ? juce::String(tray.panel().onboarding().currentStep() + 1) + ")"
                                                    : juce::String())
         + ", menu " + (tray.isMenuShowing() ? "open" : "closed"));
+    const auto latency = app.latency();
+    log("  latency " + juce::String(latency.totalMs(), 2) + " ms at " + juce::String(latency.sampleRate, 0)
+        + " Hz, aec " + (app.config().aecEnabled ? "on" : "off") + ": buffer " + juce::String(latency.bufferFrames)
+        + ", aec " + juce::String(latency.aecFrames) + ", plugins " + juce::String(latency.pluginFrames)
+        + ", input device " + juce::String(latency.inputDeviceFrames) + ", output device "
+        + juce::String(latency.outputDeviceFrames) + " frames");
     const auto slots = app.slots();
     for (size_t i = 0; i < slots.size(); ++i)
         log("  slot " + juce::String(static_cast<int>(i)) + ": " + slots[i].name + (slots[i].missing ? " [missing]" : "")
@@ -259,6 +267,10 @@ bool runCommands(AppController& app, ui::TrayIcon& tray, const juce::String& com
                 app.updateConfig([size](fixomic::Config& c) { c.bufferSize = size; });
             else
                 log("buffer size must be 64, 128 or 256");
+        } else if (arg == "--set-aec" && i + 1 < args.size()) {
+            const bool on = intArg(++i) != 0;
+            app.updateConfig([on](fixomic::Config& c) { c.aecEnabled = on; });
+            log(juce::String("aec ") + (on ? "on" : "off"));
         } else if (arg == "--status") {
             printStatus(app, tray);
         } else if (arg == "--list-effects") {
