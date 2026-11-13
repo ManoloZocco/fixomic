@@ -218,11 +218,13 @@ juce::String verifySignature(const juce::File& bundle)
     if (!codesign.start(juce::StringArray{"/usr/bin/codesign", "--verify", "--strict", bundle.getFullPathName()},
                         juce::ChildProcess::wantStdOut | juce::ChildProcess::wantStdErr))
         return refused + "codesign non avviato)";
-    const juce::String output = codesign.readAllProcessOutput().trim();
+    // Wait first: readAllProcessOutput() blocks until codesign closes its pipes, which would
+    // make the limit meaningless. Its output is small, so it fits in the pipe meanwhile.
     if (!codesign.waitForProcessToFinish(30000)) {
         codesign.kill();
-        return refused + "codesign non ha risposto)";
+        return refused + "codesign non ha risposto entro 30 secondi)";
     }
+    const juce::String output = codesign.readAllProcessOutput().trim();
     if (codesign.getExitCode() == 0)
         return {};
     // "<path>: <reason>": the path is already known, the reason is what helps.
@@ -273,7 +275,7 @@ Result interpret(bool scriptCreated, bool descriptorReturned, bool hasErrorInfo,
 {
     Result result;
     if (!scriptCreated) {
-        result.message = text("lo script di installazione non \u00e8 stato creato");
+        result.message = text("lo script per il driver non \u00e8 stato creato");
         return result;
     }
     if (hasErrorInfo) {

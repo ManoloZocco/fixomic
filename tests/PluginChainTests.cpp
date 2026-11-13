@@ -441,6 +441,16 @@ TEST_CASE("PluginChain parameter flushes run with denormals flushed to zero", "[
     }
 }
 
+TEST_CASE("PluginChain restore warnings carry no parentheses when the host gave no detail", "[chain]") {
+    PluginChain chain;
+    chain.prepare(kSampleRate, kBlock);
+    const auto errors = chain.restore({PluginSlot{descriptionXml("Ghost"), {}, false}},
+                                      [](const juce::PluginDescription&, double, int, juce::String&)
+                                          -> std::unique_ptr<juce::AudioPluginInstance> { return nullptr; });
+    REQUIRE(errors.size() == 1);
+    REQUIRE(errors[0] == juce::String::fromUTF8("Ghost: non \u00e8 stato possibile caricarlo"));
+}
+
 TEST_CASE("PluginChain restore keeps missing plugins", "[chain]") {
     PluginChain chain;
     chain.prepare(kSampleRate, kBlock);
@@ -471,8 +481,9 @@ TEST_CASE("PluginChain restore keeps missing plugins", "[chain]") {
     REQUIRE(factoryRate == kSampleRate);
     REQUIRE(factoryBlock == kBlock);
     REQUIRE(errors.size() == 2);
-    REQUIRE(errors[0].contains("Ghost"));
-    REQUIRE(errors[0].contains("not installed"));
+    // "<name>: <Italian problem> (<technical detail>)": the name first, the detail last.
+    REQUIRE(errors[0] == juce::String::fromUTF8("Ghost: non \u00e8 stato possibile caricarlo (not installed)"));
+    REQUIRE(errors[1] == "Plugin 3: descrizione del plugin non valida");
 
     const auto s = chain.slots();
     REQUIRE(s.size() == 3);

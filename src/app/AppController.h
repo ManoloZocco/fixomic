@@ -73,6 +73,7 @@ public:
         juce::File configFile = ConfigStore::defaultLocation();
         juce::File pluginCacheFile = PluginCatalog::defaultCacheLocation();
         PluginCatalog::Options catalog;   // scan worker and locations (tests point them elsewhere)
+        PluginFactory restoreFactory;     // tests: loads the saved chain instead of the catalog's formats
     };
 
     AppController();
@@ -197,6 +198,7 @@ private:
     bool onboardingFlagStored_ = false;   // declared before config_: set while config_ loads
     Config config_;
     PluginCatalog catalog_;
+    PluginFactory restoreFactory_;   // empty: the catalog's
     AecStage aec_;
     PluginChain chain_;
     PluginWindows windows_;   // destroyed before the chain: editors go before their plugins

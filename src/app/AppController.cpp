@@ -31,6 +31,7 @@ AppController::AppController(Options options)
     : store_(options.configFile),
       config_(loadConfig(store_, onboardingFlagStored_)),
       catalog_(options.pluginCacheFile, options.catalog),
+      restoreFactory_(std::move(options.restoreFactory)),
       graph_(aec_, chain_),
       backend_(graph_, aec_, chain_, [this] { return config_; }),
       engine_(backend_, [] { return nowMs() / 1000.0; }),
@@ -132,7 +133,7 @@ void AppController::restoreChain() {
     // Written before the first plugin loads; if it cannot be written the chain loads unguarded.
     if (!marker.getParentDirectory().createDirectory() || !marker.create())
         juce::Logger::writeToLog("cannot write " + marker.getFullPathName() + ": restoring the chain unguarded");
-    startupWarnings_ = chain_.restore(config_.chain, catalog_.factory());
+    startupWarnings_ = chain_.restore(config_.chain, restoreFactory_ ? restoreFactory_ : catalog_.factory());
     marker.deleteFile();
 }
 
@@ -254,7 +255,7 @@ juce::String AppController::addPlugin(const juce::PluginDescription& description
     // technical) goes to the log.
     const auto failure = [&](const juce::String& why) {
         juce::Logger::writeToLog("cannot load plugin \"" + description.name + "\" (" + description.pluginFormatName + " "
-                                 + description.fileOrIdentifier + "): " + why);
+                                 + description.fileOrIdentifier + "): " + (why.isEmpty() ? "no reason given" : why));
         return pluginLoadFailedText(description.name);
     };
     juce::String error;

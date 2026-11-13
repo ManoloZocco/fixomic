@@ -391,6 +391,8 @@ TEST_CASE("driver_script::interpret never counts a missing script or result as a
     REQUIRE_FALSE(noScript.ok);
     REQUIRE_FALSE(noScript.cancelled);
     REQUIRE(noScript.message.isNotEmpty());
+    // run() serves install and uninstall alike: the message names neither.
+    REQUIRE(noScript.message == juce::String::fromUTF8("lo script per il driver non \u00e8 stato creato"));
 
     const auto noResult = script::interpret(true, false, false, 0, {});
     REQUIRE_FALSE(noResult.ok);

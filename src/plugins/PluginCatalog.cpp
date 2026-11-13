@@ -328,10 +328,9 @@ juce::StringArray PluginCatalog::blacklisted() const {
 PluginFactory PluginCatalog::factory() {
     return [this](const juce::PluginDescription& description, double sampleRate, int blockSize,
                   juce::String& error) -> std::unique_ptr<juce::AudioPluginInstance> {
-        auto instance = formats_.createPluginInstance(description, sampleRate > 0.0 ? sampleRate : 48000.0,
-                                                      blockSize > 0 ? blockSize : 128, error);
-        if (instance == nullptr && error.isEmpty()) error = "could not be loaded";
-        return instance;
+        // `error` is only technical detail for the caller to show in parentheses; it may stay empty.
+        return formats_.createPluginInstance(description, sampleRate > 0.0 ? sampleRate : 48000.0,
+                                             blockSize > 0 ? blockSize : 128, error);
     };
 }
 

@@ -234,20 +234,21 @@ TEST_CASE("collectNotices lists the warning with its pane, then the startup warn
 
 TEST_CASE("collectNotices merges more than two startup warnings into one capped row", "[ui]") {
     REQUIRE(kMaxStartupNotices == 2);
-    const std::vector<juce::String> three{"Nectar 4: could not be loaded", "Gate: could not be loaded",
-                                          "EQ: invalid plugin description"};
+    const std::vector<juce::String> three{utf8("Nectar 4: non \u00e8 stato possibile caricarlo (not installed)"),
+                                          utf8("Gate: non \u00e8 stato possibile caricarlo"),
+                                          "EQ: descrizione del plugin non valida"};
     const auto notices = collectNotices("tap silent", PrivacyPane::SystemAudio, three);
     REQUIRE(notices.size() == 2);
     REQUIRE(notices[0] == Notice{"tap silent", PrivacyPane::SystemAudio});
     REQUIRE(notices[1].text
-            == utf8("3 avvisi all\u2019avvio: Nectar 4: could not be loaded; Gate: could not be loaded; "
-                    "EQ: invalid plugin description"));
+            == utf8("3 avvisi all\u2019avvio: Nectar 4: non \u00e8 stato possibile caricarlo (not installed); "
+                    "Gate: non \u00e8 stato possibile caricarlo; EQ: descrizione del plugin non valida"));
     REQUIRE_FALSE(notices[1].settingsPane.has_value());
     REQUIRE(notices[1].maxLines == kMergedNoticeMaxLines);
     REQUIRE(kMergedNoticeMaxLines == 3);
 
     // However many, still one row; empty entries do not count.
-    std::vector<juce::String> many(40, "Plugin: could not be loaded");
+    std::vector<juce::String> many(40, utf8("Plugin: non \u00e8 stato possibile caricarlo"));
     many.push_back({});
     const auto merged = collectNotices({}, std::nullopt, many);
     REQUIRE(merged.size() == 1);

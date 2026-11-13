@@ -401,6 +401,25 @@ TEST_CASE("AppController restores the chain without plugins after a launch that 
         REQUIRE(app.startupWarnings().empty());
         REQUIRE_FALSE(marker.exists());
     }
+    SECTION("the marker exists while the plugins load (a crash there is detected), and is gone after") {
+        int loads = 0;
+        bool markerSeenWhileLoading = false;
+        auto options = appOptions(tmp.dir);
+        options.restoreFactory = [&](const juce::PluginDescription&, double, int,
+                                     juce::String& detail) -> std::unique_ptr<juce::AudioPluginInstance> {
+            ++loads;
+            markerSeenWhileLoading = marker.existsAsFile();
+            detail = "test factory";
+            return nullptr;
+        };
+        AppController app{options};
+        REQUIRE(loads == 1);
+        REQUIRE(markerSeenWhileLoading);
+        REQUIRE_FALSE(marker.exists());
+        REQUIRE(app.startupWarnings().size() == 1);
+        REQUIRE(app.startupWarnings()[0]
+                == utf8("AUDelay: non \u00e8 stato possibile caricarlo (test factory)"));
+    }
     SECTION("after an interrupted launch: every slot missing (removable), one warning, plugins back next time") {
         REQUIRE(marker.create());
         {

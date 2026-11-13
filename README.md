@@ -123,6 +123,10 @@ in **Impostazioni di Sistema → Suono → Ingresso**.
   sviluppatore registrato presso Apple: per macOS ogni versione è un'app diversa, quindi dopo un
   aggiornamento chiede di nuovo il microfono e la *Registrazione schermo e audio di sistema*.
 - **Latenza con la cancellazione dell'eco** oltre l'obiettivo del progetto: vedi [Latenza](#latenza).
+- **Il muto del driver funziona ancora.** Il muto di fixomic Mic è condiviso con il Bridge nascosto.
+  Se un'app o un'utility mette in muto fixomic Mic, l'uscita resta in silenzio mentre i misuratori
+  di fixomic continuano a muoversi. Per toglierlo, apri *Configurazione Audio MIDI* → fixomic Mic e
+  deseleziona *Muto*.
 
 ## Se qualcosa non va
 
@@ -322,6 +326,9 @@ Input**.
   registered with Apple: to macOS every version is a different app, so after an update it asks
   again for the microphone and for *Screen & System Audio Recording*.
 - **Latency with echo cancellation** is over the project's target: see [Latency](#latency).
+- **The driver's mute still works.** The mute of fixomic Mic is shared with the hidden Bridge. If
+  an app or utility mutes fixomic Mic, it goes silent while fixomic's own meters still move. To clear
+  it, open *Audio MIDI Setup* → fixomic Mic and uncheck *Mute*.
 
 ### Troubleshooting
 

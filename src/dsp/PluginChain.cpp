@@ -202,29 +202,31 @@ std::vector<juce::String> PluginChain::restore(const std::vector<PluginSlot>& sa
     for (size_t i = 0; i < saved.size(); ++i) {
         const PluginSlot& entry = saved[i];
         juce::PluginDescription description;
-        juce::String error;
+        juce::String problem;   // Italian, shown to the user as "<name>: <problem>"
+        juce::String detail;    // technical, from the plugin host or an exception: goes last, in parentheses
         std::shared_ptr<Slot> slot;
 
         const auto xml = juce::parseXML(entry.descriptionXml);
         if (xml == nullptr || !description.loadFromXml(*xml)) {
-            error = "invalid plugin description";
-        } else if (auto instance = factory(description, sampleRate_, maxBlockSize_.load(), error)) {
+            problem = juce::String::fromUTF8("descrizione del plugin non valida");
+        } else if (auto instance = factory(description, sampleRate_, maxBlockSize_.load(), detail)) {
             // Same order as JUCE's AudioPluginHost: state, then bus layout, then prepare.
             if (!entry.state.isEmpty())
                 instance->setStateInformation(entry.state.getData(), static_cast<int>(entry.state.getSize()));
             try {
                 slot = makeSlot(std::move(instance));
             } catch (const std::exception& e) {
-                error = e.what();
+                problem = juce::String::fromUTF8("non \u00e8 stato possibile avviarlo");
+                detail = e.what();
             }
-        } else if (error.isEmpty()) {
-            error = "could not be loaded";
+        } else {
+            problem = juce::String::fromUTF8("non \u00e8 stato possibile caricarlo");
         }
 
         if (slot == nullptr) {
             const juce::String name = description.name.isNotEmpty() ? description.name
                                                                     : "Plugin " + juce::String(static_cast<int>(i) + 1);
-            errors.push_back(name + ": " + error);
+            errors.push_back(name + ": " + problem + (detail.isNotEmpty() ? " (" + detail.trim() + ")" : juce::String()));
             slot = std::make_shared<Slot>(name, entry);
         }
         slot->bypassed = entry.bypassed;
